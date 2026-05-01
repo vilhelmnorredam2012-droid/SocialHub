@@ -1,55 +1,68 @@
 (function() {
     const SUPABASE_URL = "https://kglluoywbhirrewhyrrk.supabase.co";
     const SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImtnbGx1b3l3YmhpcnJld2h5cnJrIiwicm9sZSI6ImFub24iLCJpYXQiOjE3Nzc1NDk5MjIsImV4cCI6MjA5MzEyNTkyMn0.Ha_XIs2cIJaLhs7-oQF6PkhHxYT-SRjVJ1hCLHDVZOc";
+    const supabase = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
     const ADMIN_CODE = 'fugle123';
 
-    const supabase = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
-
+    // ===== DOM =====
+    const loginModal = document.getElementById('loginModal');
+    const usernameInput = document.getElementById('usernameInput');
+    const loginBtn = document.getElementById('loginBtn');
     const app = document.getElementById('app');
-    const nameModal = document.getElementById('nameModal');
-    const nameInput = document.getElementById('nameInput');
-    const saveNameBtn = document.getElementById('saveNameBtn');
-    const globalMessagesDiv = document.getElementById('globalMessages');
+
+    const globalMessages = document.getElementById('globalMessages');
     const globalInput = document.getElementById('globalInput');
     const sendGlobalBtn = document.getElementById('sendGlobalBtn');
-    const onlineCountSpan = document.getElementById('onlineCount');
+    const userInfo = document.getElementById('userInfo');
     const onlineUsersList = document.getElementById('onlineUsersList');
-    const privateModal = document.getElementById('privateModal');
-    const privateRecipientName = document.getElementById('privateRecipientName');
-    const privateMessagesDiv = document.getElementById('privateMessages');
-    const privateInput = document.getElementById('privateInput');
-    const sendPrivateBtn = document.getElementById('sendPrivateBtn');
-    const closePrivateBtn = document.getElementById('closePrivateBtn');
+    const onlineCount = document.getElementById('onlineCount');
+    const logoutBtn = document.getElementById('logoutBtn');
 
-    // Admin DOM
-    const adminCodeInput = document.getElementById('adminCodeInput');
-    const unlockAdminBtn = document.getElementById('unlockAdminBtn');
-    const adminStatus = document.getElementById('adminStatus');
     const adminPanel = document.getElementById('adminPanel');
-    const adminDeleteAllBtn = document.getElementById('adminDeleteAllBtn');
-    const adminCleanupBtn = document.getElementById('adminCleanupBtn');
+    const adminDashboardBtn = document.getElementById('adminDashboardBtn');
+    const adminModal = document.getElementById('adminModal');
+    const closeAdminBtn = document.getElementById('closeAdminBtn');
 
-    // Nye admin-knapper (oprettes dynamisk)
-    let adminLockBtn = null;
-    let adminUnkickUserBtn = null;
-    let adminRefreshPresenceBtn = null;
-    let adminExportBtn = null;
+    const statUsers = document.getElementById('statUsers');
+    const statComments = document.getElementById('statComments');
+    const statMessages = document.getElementById('statMessages');
+    const adminUsersList = document.getElementById('adminUsersList');
+    const adminDeleteCommentsBtn = document.getElementById('adminDeleteCommentsBtn');
+    const adminDeleteLikesBtn = document.getElementById('adminDeleteLikesBtn');
+    const adminDeleteMessagesBtn = document.getElementById('adminDeleteMessagesBtn');
+    const adminSuspendUserBtn = document.getElementById('adminSuspendUserBtn');
+    const adminClearUserDataBtn = document.getElementById('adminClearUserDataBtn');
+    const adminNukeBtn = document.getElementById('adminNukeBtn');
+    const adminUnsuspendAllBtn = document.getElementById('adminUnsuspendAllBtn');
 
+    const privateChatModal = document.getElementById('privateChatModal');
+    const privateChatTitle = document.getElementById('privateChatTitle');
+    const privateChatSubtitle = document.getElementById('privateChatSubtitle');
+    const closePrivateChatBtn = document.getElementById('closePrivateChatBtn');
+    const privateMessages = document.getElementById('privateMessages');
+    const privateMessageInput = document.getElementById('privateMessageInput');
+    const sendPrivateBtn = document.getElementById('sendPrivateBtn');
+
+    const helpBtn = document.getElementById('helpBtn');
+    const helpModal = document.getElementById('helpModal');
+    const closeHelpBtn = document.getElementById('closeHelpBtn');
+
+    const toastContainer = document.getElementById('toastContainer');
+
+    // ===== STATE =====
     let currentUser = null;
-    let isAdmin = localStorage.getItem('chat_admin_unlocked') === 'true';
-    let globalChannel = null;
-    let privateChannel = null;
-    let presenceChannel = null;
-    let kickedChannel = null;
     let onlineUsers = new Map();
-    let activePrivateRecipient = null;
-    let kickedUsers = new Set();
-    let currentUserIsKicked = false;
-    let sentPrivateTyping = false;
-    let sentGlobalTyping = false;
-    let typingTimeoutGlobal = null;
-    let typingTimeoutPrivate = null;
+    let loadedMessageIds = new Set();
+    let loadedPrivateMessageIds = new Set();
+    let adminUnlocked = false;
+    let suspendedUsers = new Set();
+    let currentPrivateUser = null;
+    let realtimeStarted = false;
 
+    let messageChannel = null;
+    let presenceChannel = null;
+
+    // ===== UTILS =====
     function escapeHtml(text) {
         const div = document.createElement('div');
         div.textContent = text ?? '';
@@ -60,712 +73,752 @@
         return new Date(date).toLocaleTimeString('da-DK', { hour: '2-digit', minute: '2-digit' });
     }
 
-    function scrollToBottom(element) {
-        requestAnimationFrame(() => {
-            element.scrollTop = element.scrollHeight;
+    function formatDateShort(date) {
+        const d = new Date(date);
+        const today = new Date();
+        const yesterday = new Date(today);
+        yesterday.setDate(yesterday.getDate() - 1);
+
+        if (d.toDateString() === today.toDateString()) return 'I dag';
+        if (d.toDateString() === yesterday.toDateString()) return 'I går';
+        return d.toLocaleDateString('da-DK', { month: 'short', day: 'numeric' });
+    }
+
+    function showToast(message, type = 'info') {
+        const toast = document.createElement('div');
+        toast.className = 'toast';
+
+        const colors = {
+            info: 'rgba(88, 101, 242, 0.98)',
+            success: 'rgba(22, 163, 74, 0.98)',
+            warning: 'rgba(217, 119, 6, 0.98)',
+            error: 'rgba(220, 38, 38, 0.98)'
+        };
+
+        toast.style.background = colors[type] || colors.info;
+        toast.textContent = message;
+
+        toast.addEventListener('click', () => toast.remove());
+        toastContainer.appendChild(toast);
+
+        setTimeout(() => {
+            if (toast.isConnected) toast.remove();
+        }, 5000);
+    }
+
+    function notify(title, body) {
+        if ('Notification' in window && Notification.permission === 'granted') {
+            new Notification(title, { body });
+        }
+    }
+
+    function requestNotificationsIfNeeded() {
+        if ('Notification' in window && Notification.permission === 'default') {
+            Notification.requestPermission();
+        }
+    }
+
+    function openModal(modal) {
+        modal.style.display = 'flex';
+    }
+
+    function closeModal(modal) {
+        modal.style.display = 'none';
+    }
+
+    function saveSuspended() {
+        localStorage.setItem('suspended_users', JSON.stringify(Array.from(suspendedUsers)));
+    }
+
+    function loadSuspended() {
+        const suspended = localStorage.getItem('suspended_users');
+        suspendedUsers = suspended ? new Set(JSON.parse(suspended)) : new Set();
+    }
+
+    function isSuspended(username) {
+        return suspendedUsers.has(username);
+    }
+
+    function stopRealtime() {
+        if (messageChannel) {
+            supabase.removeChannel(messageChannel);
+            messageChannel = null;
+        }
+
+        if (presenceChannel) {
+            supabase.removeChannel(presenceChannel);
+            presenceChannel = null;
+        }
+
+        realtimeStarted = false;
+    }
+
+    function refreshGlobalHistory() {
+        loadedMessageIds.clear();
+        globalMessages.innerHTML = '';
+        loadGlobalHistory();
+    }
+
+    function refreshPrivateHistory() {
+        if (!currentPrivateUser) return;
+        loadedPrivateMessageIds.clear();
+        privateMessages.innerHTML = '';
+        loadPrivateHistory(currentPrivateUser);
+    }
+
+    function removeMessageElementById(id) {
+        const globalEl = globalMessages.querySelector(`[data-message-id="${id}"]`);
+        if (globalEl) globalEl.remove();
+        loadedMessageIds.delete(id);
+
+        const privateEl = privateMessages.querySelector(`[data-private-message-id="${id}"]`);
+        if (privateEl) privateEl.remove();
+        loadedPrivateMessageIds.delete(id);
+    }
+
+    function canSeeDeleteButton(sender) {
+        return sender === currentUser;
+    }
+
+    function createMessageElement(msg, isPrivate = false) {
+        const isSelf = msg.sender === currentUser;
+        const div = document.createElement('div');
+        div.className = `message ${isSelf ? 'self' : 'other'}`;
+
+        if (isPrivate) {
+            div.dataset.privateMessageId = String(msg.id);
+        } else {
+            div.dataset.messageId = String(msg.id);
+        }
+
+        div.innerHTML = `
+            <div class="message-sender">${isSelf ? 'dig' : escapeHtml(msg.sender)}</div>
+            <div class="message-content">${escapeHtml(msg.content)}</div>
+            <div class="message-time">${formatTime(msg.created_at)}</div>
+            ${canSeeDeleteButton(msg.sender) ? `<button class="message-delete" data-delete-msg="${msg.id}">🗑</button>` : ''}
+        `;
+
+        const deleteBtn = div.querySelector('[data-delete-msg]');
+        if (deleteBtn) {
+            deleteBtn.addEventListener('click', async (e) => {
+                e.stopPropagation();
+                const msgId = Number(e.currentTarget.getAttribute('data-delete-msg'));
+                if (!confirm('Slet besked?')) return;
+
+                const { error } = await supabase.from('messages').delete().eq('id', msgId);
+                if (error) {
+                    showToast('Kunne ikke slette besked', 'error');
+                } else {
+                    div.remove();
+                    if (isPrivate) {
+                        loadedPrivateMessageIds.delete(msgId);
+                    } else {
+                        loadedMessageIds.delete(msgId);
+                    }
+                }
+            });
+        }
+
+        return div;
+    }
+
+    function appendMessage(container, loadedSet, msg, isPrivate = false) {
+        if (loadedSet.has(msg.id) || isSuspended(msg.sender)) return;
+        loadedSet.add(msg.id);
+        container.appendChild(createMessageElement(msg, isPrivate));
+        container.scrollTop = container.scrollHeight;
+    }
+
+    async function sendMessage({ sender, content, type, receiver = null }) {
+        const payload = {
+            sender,
+            content,
+            type,
+            receiver
+        };
+
+        const { error } = await supabase.from('messages').insert([payload]);
+        return { error };
+    }
+
+    // ===== LOGIN =====
+    function initLogin() {
+        loadSuspended();
+
+        const stored = localStorage.getItem('socialhub_user');
+        if (stored && stored.trim()) {
+            currentUser = stored.trim();
+            adminUnlocked = localStorage.getItem('admin_unlocked') === 'true';
+            login();
+        }
+    }
+
+    async function login() {
+        if (!currentUser) return;
+
+        await supabase.from('users').upsert({
+            username: currentUser
+        }, { onConflict: 'username' });
+
+        loginModal.style.display = 'none';
+        app.style.display = 'flex';
+        userInfo.textContent = `👤 ${escapeHtml(currentUser)}`;
+
+        if (adminUnlocked) {
+            adminPanel.style.display = 'block';
+        }
+
+        requestNotificationsIfNeeded();
+
+        if (!realtimeStarted) {
+            startRealtime();
+            realtimeStarted = true;
+        } else {
+            refreshGlobalHistory();
+            renderOnlineUsers();
+        }
+
+        showToast(`Velkommen ${currentUser} 👋`, 'success');
+    }
+
+    loginBtn.addEventListener('click', () => {
+        const name = usernameInput.value.trim();
+        if (!name) return alert('Skriv et brugernavn');
+        if (name.length < 2) return alert('Min 2 tegn');
+
+        currentUser = name;
+        localStorage.setItem('socialhub_user', name);
+        login();
+    });
+
+    usernameInput.addEventListener('keypress', (e) => {
+        if (e.key === 'Enter') loginBtn.click();
+    });
+
+    logoutBtn.addEventListener('click', () => {
+        stopRealtime();
+        localStorage.removeItem('socialhub_user');
+        localStorage.removeItem('admin_unlocked');
+        currentUser = null;
+        adminUnlocked = false;
+        currentPrivateUser = null;
+        app.style.display = 'none';
+        loginModal.style.display = 'flex';
+        usernameInput.value = '';
+        usernameInput.focus();
+        showToast('Logget ud', 'info');
+    });
+
+    // ===== HELP MODAL =====
+    helpBtn.addEventListener('click', () => openModal(helpModal));
+    closeHelpBtn.addEventListener('click', () => closeModal(helpModal));
+    helpModal.addEventListener('click', (e) => {
+        if (e.target === helpModal) closeModal(helpModal);
+    });
+
+    // ===== ADMIN UNLOCK =====
+    const adminUnlockBtn = document.createElement('button');
+    adminUnlockBtn.className = 'btn btn-block';
+    adminUnlockBtn.textContent = '🔓 Unlock Admin';
+    adminUnlockBtn.addEventListener('click', () => {
+        const code = prompt('Admin kode:');
+        if (code === ADMIN_CODE) {
+            adminUnlocked = true;
+            localStorage.setItem('admin_unlocked', 'true');
+            adminPanel.style.display = 'block';
+            showToast('Admin unlocked ⚙️', 'success');
+        } else {
+            showToast('Forkert kode', 'error');
+        }
+    });
+
+    if (!adminPanel.querySelector('[data-admin-unlock]')) {
+        const wrapper = document.createElement('div');
+        wrapper.className = 'admin-unlock-wrapper';
+        wrapper.setAttribute('data-admin-unlock', 'true');
+        wrapper.appendChild(adminUnlockBtn);
+        adminPanel.parentElement.insertBefore(wrapper, adminPanel);
+    }
+
+    adminDashboardBtn.addEventListener('click', async () => {
+        if (!adminUnlocked) return alert('Ikke admin!');
+        await loadAdminStats();
+        openModal(adminModal);
+    });
+
+    closeAdminBtn.addEventListener('click', () => closeModal(adminModal));
+
+    async function loadAdminStats() {
+        const { count: userCount } = await supabase.from('users').select('*', { count: 'exact', head: true });
+        const { count: commentCount } = await supabase.from('comments').select('*', { count: 'exact', head: true });
+        const { count: messageCount } = await supabase.from('messages').select('*', { count: 'exact', head: true });
+
+        statUsers.textContent = userCount || 0;
+        statComments.textContent = commentCount || 0;
+        statMessages.textContent = messageCount || 0;
+
+        const { data: users } = await supabase.from('users').select('*').order('created_at', { ascending: false });
+        adminUsersList.innerHTML = '';
+
+        (users || []).forEach(user => {
+            const isSusp = suspendedUsers.has(user.username);
+            const div = document.createElement('div');
+            div.className = 'admin-user-item';
+            div.innerHTML = `
+                <div class="admin-user-name">
+                    ${escapeHtml(user.username)}
+                    ${isSusp ? '<span style="color: var(--danger); margin-left: 8px;">⛔ SUSPENDERET</span>' : ''}
+                </div>
+                <div class="admin-user-actions">
+                    <button class="btn btn-small ${isSusp ? 'btn-success' : 'btn-warning'}" data-suspend="${user.username}">
+                        ${isSusp ? '✅ Ophæv' : '⛔ Suspender'}
+                    </button>
+                    <button class="btn btn-small danger" data-clear="${user.username}">🗑 Slet data</button>
+                </div>
+            `;
+
+            div.querySelector('[data-suspend]')?.addEventListener('click', () => {
+                if (isSusp) {
+                    suspendedUsers.delete(user.username);
+                    showToast(`${user.username} er fri igen`, 'success');
+                } else {
+                    if (confirm(`Suspender ${user.username}?`)) {
+                        suspendedUsers.add(user.username);
+                        showToast(`${user.username} er suspenderet`, 'warning');
+                    }
+                }
+
+                saveSuspended();
+                loadAdminStats();
+                refreshGlobalHistory();
+                if (currentPrivateUser) refreshPrivateHistory();
+                renderOnlineUsers();
+            });
+
+            div.querySelector('[data-clear]')?.addEventListener('click', async () => {
+                if (!confirm(`Slet ALT data fra ${user.username}? Dette kan IKKE fortrydes!`)) return;
+
+                const ops = [
+                    supabase.from('comments').delete().eq('author', user.username),
+                    supabase.from('likes').delete().eq('username', user.username),
+                    supabase.from('messages').delete().or(`sender.eq.${user.username},receiver.eq.${user.username}`),
+                    supabase.from('users').delete().eq('username', user.username)
+                ];
+
+                const results = await Promise.all(ops);
+                const errors = results.filter(r => r.error);
+
+                if (errors.length > 0) {
+                    console.error('Sletningsfejl:', errors);
+                    showToast('Nogle data kunne ikke slettes', 'error');
+                } else {
+                    showToast(`${user.username} er slettet`, 'success');
+                }
+
+                suspendedUsers.delete(user.username);
+                saveSuspended();
+                loadAdminStats();
+                refreshGlobalHistory();
+                if (currentPrivateUser) refreshPrivateHistory();
+                renderOnlineUsers();
+            });
+
+            adminUsersList.appendChild(div);
         });
     }
 
-    function getStoredUsername() {
-        return localStorage.getItem('chat_username');
-    }
+    async function confirmAndDelete(table, displayName) {
+        if (!confirm(`Slet ALLE ${displayName}? Dette kan ikke fortrydes!`)) return;
 
-    // —— ADMIN UI (med lock/unlock og dynamiske knapper) ——
-    function setAdminUI() {
-        if (!adminStatus || !adminPanel) return;
-        if (isAdmin) {
-            adminStatus.textContent = 'Admin er slået til';
-            adminPanel.classList.add('admin-panel-visible');
-            adminCodeInput.value = ADMIN_CODE;
-            unlockAdminBtn.textContent = 'Admin aktiv';
-            unlockAdminBtn.disabled = true;
+        const { error } = await supabase.from(table).delete().neq('id', 0);
 
-            if (!adminLockBtn) {
-                adminLockBtn = document.createElement('button');
-                adminLockBtn.className = 'btn btn-block';
-                adminLockBtn.textContent = '🔒 Lås admin';
-                adminLockBtn.addEventListener('click', lockAdmin);
-                adminPanel.appendChild(adminLockBtn);
-            }
-            adminLockBtn.style.display = 'block';
-
-            if (!adminUnkickUserBtn) {
-                adminUnkickUserBtn = document.createElement('button');
-                adminUnkickUserBtn.className = 'btn btn-block';
-                adminUnkickUserBtn.textContent = '🔓 Fjern kick (indtast navn)';
-                adminUnkickUserBtn.addEventListener('click', unkickUser);
-                adminPanel.appendChild(adminUnkickUserBtn);
-            }
-            if (!adminRefreshPresenceBtn) {
-                adminRefreshPresenceBtn = document.createElement('button');
-                adminRefreshPresenceBtn.className = 'btn btn-block';
-                adminRefreshPresenceBtn.textContent = '🔄 Tving opdater online-liste';
-                adminRefreshPresenceBtn.addEventListener('click', refreshPresence);
-                adminPanel.appendChild(adminRefreshPresenceBtn);
-            }
-            if (!adminExportBtn) {
-                adminExportBtn = document.createElement('button');
-                adminExportBtn.className = 'btn btn-block';
-                adminExportBtn.textContent = '💾 Eksporter chatlog (JSON)';
-                adminExportBtn.addEventListener('click', exportChat);
-                adminPanel.appendChild(adminExportBtn);
-            }
-
-            if (adminUnkickUserBtn) adminUnkickUserBtn.style.display = 'block';
-            if (adminRefreshPresenceBtn) adminRefreshPresenceBtn.style.display = 'block';
-            if (adminExportBtn) adminExportBtn.style.display = 'block';
+        if (error) {
+            console.error(`Fejl ved sletning af ${displayName}:`, error);
+            showToast(`Kunne ikke slette ${displayName}`, 'error');
         } else {
-            adminStatus.textContent = 'Admin er låst';
-            adminPanel.classList.remove('admin-panel-visible');
-            adminCodeInput.value = '';
-            unlockAdminBtn.textContent = 'Lås op';
-            unlockAdminBtn.disabled = false;
-            if (adminLockBtn) adminLockBtn.style.display = 'none';
-            if (adminUnkickUserBtn) adminUnkickUserBtn.style.display = 'none';
-            if (adminRefreshPresenceBtn) adminRefreshPresenceBtn.style.display = 'none';
-            if (adminExportBtn) adminExportBtn.style.display = 'none';
+            showToast(`Alle ${displayName} er slettet`, 'success');
+            if (table === 'messages') {
+                loadedMessageIds.clear();
+                loadedPrivateMessageIds.clear();
+                globalMessages.innerHTML = '';
+                privateMessages.innerHTML = '';
+            }
+            loadAdminStats();
         }
     }
 
-    function lockAdmin() {
-        isAdmin = false;
-        localStorage.removeItem('chat_admin_unlocked');
-        setAdminUI();
+    adminDeleteCommentsBtn.addEventListener('click', () => confirmAndDelete('comments', 'kommentarer'));
+    adminDeleteLikesBtn.addEventListener('click', () => confirmAndDelete('likes', 'likes'));
+    adminDeleteMessagesBtn.addEventListener('click', () => confirmAndDelete('messages', 'beskeder'));
+
+    adminSuspendUserBtn.addEventListener('click', () => {
+        const target = prompt('Brugernavn der skal suspenderes:');
+        if (!target || !target.trim()) return;
+
+        const name = target.trim();
+        if (suspendedUsers.has(name)) {
+            showToast(`${name} er allerede suspenderet`, 'warning');
+            return;
+        }
+
+        suspendedUsers.add(name);
+        saveSuspended();
+        showToast(`${name} er nu suspenderet`, 'warning');
+        loadAdminStats();
+        refreshGlobalHistory();
+        if (currentPrivateUser) refreshPrivateHistory();
         renderOnlineUsers();
-        loadGlobalHistory();
-        if (activePrivateRecipient) loadPrivateHistory();
-    }
+    });
 
-    async function unkickUser() {
-        if (!isAdmin) return;
-        const username = prompt('Indtast brugernavn for at fjerne kick:');
-        if (!username || username.trim() === '') return;
-        try {
-            const { error } = await supabase
-                .from('kicked_users')
-                .delete()
-                .eq('username', username.trim());
-            if (error) throw error;
-            alert(`${username} er nu fjernet fra kick-listen.`);
-        } catch (error) {
-            console.error('Kunne ikke fjerne kick:', error);
-            alert('Fejl ved fjernelse af kick.');
+    adminClearUserDataBtn.addEventListener('click', async () => {
+        const target = prompt('Brugernavn hvis data skal slettes:');
+        if (!target || !target.trim()) return;
+
+        const name = target.trim();
+        if (!confirm(`Slet ALT data for ${name}? Dette kan IKKE fortrydes!`)) return;
+
+        const ops = [
+            supabase.from('comments').delete().eq('author', name),
+            supabase.from('likes').delete().eq('username', name),
+            supabase.from('messages').delete().or(`sender.eq.${name},receiver.eq.${name}`),
+            supabase.from('users').delete().eq('username', name)
+        ];
+
+        const results = await Promise.all(ops);
+        const errors = results.filter(r => r.error);
+
+        if (errors.length > 0) {
+            console.error('Sletningsfejl:', errors);
+            showToast('Nogle data kunne ikke slettes', 'error');
+        } else {
+            showToast(`${name}'s data er slettet`, 'success');
         }
-    }
 
-    async function refreshPresence() {
-        if (!isAdmin || !presenceChannel) return;
-        try {
-            await presenceChannel.track({
-                username: currentUser,
-                online_at: new Date().toISOString(),
-            });
-        } catch(e) {}
+        suspendedUsers.delete(name);
+        saveSuspended();
+        loadAdminStats();
+        refreshGlobalHistory();
+        if (currentPrivateUser) refreshPrivateHistory();
         renderOnlineUsers();
-        alert('Online liste opdateret.');
+    });
+
+    if (adminUnsuspendAllBtn) {
+        adminUnsuspendAllBtn.addEventListener('click', () => {
+            if (suspendedUsers.size === 0) {
+                showToast('Ingen brugere er suspenderet', 'info');
+                return;
+            }
+
+            if (confirm(`Ophæv suspendering for ALLE ${suspendedUsers.size} brugere?`)) {
+                suspendedUsers.clear();
+                saveSuspended();
+                showToast('Alle suspenderinger er ophævet', 'success');
+                loadAdminStats();
+                refreshGlobalHistory();
+                if (currentPrivateUser) refreshPrivateHistory();
+                renderOnlineUsers();
+            }
+        });
     }
 
-    async function exportChat() {
-        if (!isAdmin) return;
-        try {
-            const { data, error } = await supabase
-                .from('messages')
-                .select('*')
-                .order('created_at', { ascending: true });
-            if (error) throw error;
-            const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
-            const url = URL.createObjectURL(blob);
-            const a = document.createElement('a');
-            a.href = url;
-            a.download = `chat-log-${new Date().toISOString().slice(0,10)}.json`;
-            a.click();
-            URL.revokeObjectURL(url);
-        } catch (error) {
-            console.error('Eksport fejlede:', error);
-            alert('Kunne ikke eksportere chatlog.');
+    adminNukeBtn.addEventListener('click', async () => {
+        if (!confirm('⚠️ SLET VIRKELIGT ALT? Dette kan IKKE fortrydes!')) return;
+        if (!confirm('Er du 100% sikker? ALLE data i HELE databasen vil være væk!')) return;
+        if (!confirm('SIDSTE ADVARSEL! Tryk OK for at slette alt!')) return;
+
+        const tables = ['likes', 'comments', 'messages', 'users'];
+        const errors = [];
+
+        for (const table of tables) {
+            const { error } = await supabase.from(table).delete().neq('id', 0);
+            if (error) {
+                console.error(`Nuke fejl på ${table}:`, error);
+                errors.push(`${table}: ${error.message}`);
+            }
         }
-    }
 
-    function showSystemNotice(text) {
-        let notice = document.getElementById('systemNotice');
-        if (!notice) {
-            notice = document.createElement('div');
-            notice.id = 'systemNotice';
-            notice.className = 'system-notice';
-            document.querySelector('.sidebar').prepend(notice);
+        loadedMessageIds.clear();
+        loadedPrivateMessageIds.clear();
+        globalMessages.innerHTML = '';
+        privateMessages.innerHTML = '';
+
+        if (errors.length > 0) {
+            showToast('Nogle tabeller kunne ikke slettes', 'error');
+        } else {
+            showToast('ALT ER SLETTET', 'success');
         }
-        notice.textContent = text;
-        notice.style.display = 'block';
-    }
 
-    function clearSystemNotice() {
-        const notice = document.getElementById('systemNotice');
-        if (notice) notice.style.display = 'none';
-    }
+        loadAdminStats();
+    });
 
-    function messageActionHtml(msg) {
-        const canDelete = msg.sender === currentUser || isAdmin;
-        if (!canDelete) return '';
-        return `<button class="message-action-btn delete-message-btn" data-message-id="${escapeHtml(msg.id)}" title="Slet besked">🗑</button>`;
-    }
+    // ===== GLOBAL CHAT =====
+    async function displayGlobalMessage(msg, fromRealtime = false) {
+        if (loadedMessageIds.has(msg.id) || isSuspended(msg.sender)) return;
+        loadedMessageIds.add(msg.id);
 
-    function renderMessage(msg, container) {
-        if (!msg || !msg.id) return;
-        const existing = container.querySelector(`.message[data-message-id="${CSS.escape(String(msg.id))}"]`);
-        if (existing) return;
+        const div = createMessageElement(msg, false);
+        globalMessages.appendChild(div);
+        globalMessages.scrollTop = globalMessages.scrollHeight;
 
-        const div = document.createElement('div');
-        div.className = `message ${msg.sender === currentUser ? 'self' : 'other'}`;
-        div.dataset.messageId = msg.id;
-        div.dataset.sender = msg.sender ?? '';
-        div.dataset.type = msg.type ?? '';
-        div.dataset.recipient = msg.recipient ?? '';
-
-        const actionHtml = messageActionHtml(msg);
-
-        div.innerHTML = `
-            <div class="message-top">
-                <div class="sender">${msg.sender === currentUser ? 'dig' : escapeHtml(msg.sender || 'Ukendt')}</div>
-                <div class="message-actions">${actionHtml}</div>
-            </div>
-            <div class="content">${escapeHtml(msg.content || '')}</div>
-            <div class="time">${formatTime(msg.created_at)}</div>
-        `;
-
-        container.appendChild(div);
-    }
-
-    function displayGlobalMessage(msg) {
-        renderMessage(msg, globalMessagesDiv);
-        scrollToBottom(globalMessagesDiv);
-    }
-
-    function displayPrivateMessage(msg) {
-        if (!activePrivateRecipient) return;
-        const isRelevant = (msg.sender === currentUser && msg.recipient === activePrivateRecipient) ||
-                           (msg.sender === activePrivateRecipient && msg.recipient === currentUser);
-        if (!isRelevant) return;
-        renderMessage(msg, privateMessagesDiv);
-        scrollToBottom(privateMessagesDiv);
+        if (fromRealtime && msg.sender !== currentUser) {
+            showToast(`Ny besked fra ${msg.sender}`, 'info');
+            if (document.hidden) {
+                notify(`Ny besked fra ${msg.sender}`, msg.content);
+            }
+        }
     }
 
     async function loadGlobalHistory() {
-        try {
-            const { data, error } = await supabase
-                .from('messages')
-                .select('*')
-                .eq('type', 'global')
-                .order('created_at', { ascending: true })
-                .limit(200);
-            if (error) throw error;
-            globalMessagesDiv.innerHTML = '';
-            (data || []).forEach(displayGlobalMessage);
-        } catch (error) {
-            console.error('Kunne ikke hente historik:', error);
-        }
-    }
+        const { data, error } = await supabase
+            .from('messages')
+            .select('*')
+            .eq('type', 'global')
+            .order('created_at', { ascending: true })
+            .limit(100);
 
-    async function loadPrivateHistory() {
-        if (!activePrivateRecipient) return;
-        try {
-            const { data, error } = await supabase
-                .from('messages')
-                .select('*')
-                .eq('type', 'private')
-                .or(`and(sender.eq.${currentUser},recipient.eq.${activePrivateRecipient}),and(sender.eq.${activePrivateRecipient},recipient.eq.${currentUser})`)
-                .order('created_at', { ascending: true })
-                .limit(100);
-            if (error) throw error;
-            privateMessagesDiv.innerHTML = '';
-            (data || []).forEach(displayPrivateMessage);
-            scrollToBottom(privateMessagesDiv);
-        } catch (error) {
-            console.error('Fejl ved hentning af privat historik:', error);
+        if (error) {
+            console.error('Fejl ved load af beskeder:', error);
+            showToast('Kunne ikke hente beskeder', 'error');
+            return;
         }
-    }
 
-    function renderOnlineUsers() {
-        const users = Array.from(onlineUsers.values());
-        users.sort((a, b) => {
-            if (a.username === currentUser) return -1;
-            if (b.username === currentUser) return 1;
-            return a.username.localeCompare(b.username, 'da');
+        globalMessages.innerHTML = '';
+        loadedMessageIds.clear();
+
+        (data || []).forEach(msg => {
+            if (!isSuspended(msg.sender)) {
+                displayGlobalMessage(msg, false);
+            }
         });
-
-        onlineUsersList.innerHTML = '';
-        users.forEach(u => {
-            const row = document.createElement('div');
-            row.className = 'online-user' + (u.username === currentUser ? ' self-indicator' : '');
-            row.innerHTML = `
-                <span class="online-dot"></span>
-                <span class="online-name">${escapeHtml(u.username)}${u.username === currentUser ? ' (dig)' : ''}</span>
-            `;
-
-            if (u.username !== currentUser) {
-                const btnWrap = document.createElement('div');
-                btnWrap.className = 'online-actions';
-
-                const openBtn = document.createElement('button');
-                openBtn.className = 'mini-btn';
-                openBtn.textContent = 'Chat';
-                openBtn.addEventListener('click', () => openPrivateChat(u.username));
-                btnWrap.appendChild(openBtn);
-
-                if (isAdmin) {
-                    const kickBtn = document.createElement('button');
-                    kickBtn.className = 'mini-btn danger';
-                    kickBtn.textContent = 'Kick';
-                    kickBtn.addEventListener('click', () => kickUser(u.username));
-                    btnWrap.appendChild(kickBtn);
-                }
-
-                row.appendChild(btnWrap);
-            }
-
-            onlineUsersList.appendChild(row);
-        });
-
-        onlineCountSpan.textContent = `${users.length} online`;
     }
-
-    async function loadKickedUsers() {
-        try {
-            const { data, error } = await supabase
-                .from('kicked_users')
-                .select('username');
-            if (error) throw error;
-
-            kickedUsers = new Set((data || []).map(row => row.username).filter(Boolean));
-            currentUserIsKicked = kickedUsers.has(currentUser);
-
-            if (currentUserIsKicked) {
-                lockChat();
-                showSystemNotice('Du er blevet kicked fra chatten.');
-            } else {
-                unlockChat();
-                clearSystemNotice();
-            }
-
-            renderOnlineUsers();
-        } catch (error) {
-            console.error('Kunne ikke hente kicked brugere:', error);
-        }
-    }
-
-    function lockChat() {
-        globalInput.disabled = true;
-        sendGlobalBtn.disabled = true;
-        privateInput.disabled = true;
-        sendPrivateBtn.disabled = true;
-    }
-
-    function unlockChat() {
-        globalInput.disabled = false;
-        sendGlobalBtn.disabled = false;
-        privateInput.disabled = false;
-        sendPrivateBtn.disabled = false;
-    }
-
-    // ---------- SLETNING MED RPC (ID som streng, bedre fejlmelding) ----------
-    async function deleteMessage(messageId) {
-        try {
-            // Send ID som string – IKKE parseInt, da bigint kan være for stort
-            const { error } = await supabase
-                .rpc('delete_message_secure', {
-                    p_message_id: messageId,
-                    p_username: currentUser,
-                    p_admin_secret: isAdmin ? ADMIN_CODE : null
-                });
-                
-            if (error) throw error;
-        } catch (error) {
-            console.error('Fejl ved sletning:', error);
-            alert('Kunne ikke slette besked. ' + (error.message || ''));
-        }
-    }
-
-    async function deleteAllMessages() {
-        if (!isAdmin) return;
-        if (!confirm('Vil du slette ALLE beskeder?')) return;
-        try {
-            const { error } = await supabase
-                .rpc('delete_all_messages_secure', {
-                    p_admin_secret: ADMIN_CODE
-                });
-            if (error) throw error;
-            globalMessagesDiv.innerHTML = '';
-            privateMessagesDiv.innerHTML = '';
-        } catch (error) {
-            console.error('Kunne ikke slette alle beskeder:', error);
-            alert('Handlingen blev afvist: ' + (error.message || ''));
-        }
-    }
-
-    async function cleanupBrokenMessages() {
-        if (!isAdmin) return;
-        if (!confirm('Vil du rydde tomme eller ødelagte beskeder?')) return;
-        try {
-            const { data, error } = await supabase
-                .from('messages')
-                .select('id, content, sender, type');
-            if (error) throw error;
-
-            const broken = (data || []).filter(row => {
-                const content = (row.content ?? '').trim();
-                const sender = (row.sender ?? '').trim();
-                const type = (row.type ?? '').trim();
-                return !content || !sender || !['global', 'private'].includes(type);
-            });
-
-            for (const row of broken) {
-                await supabase
-                    .rpc('delete_message_secure', {
-                        p_message_id: row.id,
-                        p_username: row.sender,
-                        p_admin_secret: ADMIN_CODE
-                    });
-            }
-
-            await Promise.all([loadGlobalHistory(), activePrivateRecipient ? loadPrivateHistory() : Promise.resolve()]);
-        } catch (error) {
-            console.error('Kunne ikke rydde beskeder:', error);
-            alert('Kunne ikke rydde ødelagte beskeder: ' + (error.message || ''));
-        }
-    }
-
-    async function kickUser(username) {
-        if (!isAdmin) return;
-        if (!username || username === currentUser) return;
-        if (!confirm(`Kick ${username}?`)) return;
-
-        try {
-            const { error } = await supabase
-                .from('kicked_users')
-                .upsert({
-                    username,
-                    kicked_by: currentUser,
-                    kicked_at: new Date().toISOString(),
-                }, { onConflict: 'username' });
-            if (error) throw error;
-        } catch (error) {
-            console.error('Kunne ikke kicke brugeren:', error);
-            alert('Kunne ikke kicke brugeren.');
-        }
-    }
-
-    function removeMessagesFromDomById(messageId) {
-        const selector = `.message[data-message-id="${CSS.escape(String(messageId))}"]`;
-        document.querySelectorAll(selector).forEach(el => el.remove());
-    }
-
-    function initUsername() {
-        const stored = getStoredUsername();
-        if (stored && stored.trim()) {
-            currentUser = stored.trim();
-            nameModal.style.display = 'none';
-            app.style.display = 'flex';
-            setAdminUI();
-            startRealtime();
-        } else {
-            nameModal.style.display = 'flex';
-            app.style.display = 'none';
-        }
-    }
-
-    saveNameBtn.addEventListener('click', () => {
-        const name = nameInput.value.trim();
-        if (!name) return alert('Indtast et navn');
-        if (name.length < 2) return alert('Navn skal være mindst 2 tegn');
-        currentUser = name;
-        localStorage.setItem('chat_username', name);
-        nameModal.style.display = 'none';
-        app.style.display = 'flex';
-        setAdminUI();
-        startRealtime();
-    });
-
-    nameInput.addEventListener('keypress', (e) => {
-        if (e.key === 'Enter') saveNameBtn.click();
-    });
-
-    unlockAdminBtn?.addEventListener('click', () => {
-        const code = (adminCodeInput.value || '').trim();
-        if (code === ADMIN_CODE) {
-            isAdmin = true;
-            localStorage.setItem('chat_admin_unlocked', 'true');
-            setAdminUI();
-            renderOnlineUsers();
-            loadGlobalHistory();
-            if (activePrivateRecipient) loadPrivateHistory();
-            alert('Admin slået til');
-        } else {
-            alert('Forkert kode');
-        }
-    });
-
-    adminDeleteAllBtn?.addEventListener('click', deleteAllMessages);
-    adminCleanupBtn?.addEventListener('click', cleanupBrokenMessages);
 
     async function sendGlobalMessage() {
-        if (currentUserIsKicked) return alert('Du er kicked og kan ikke skrive.');
         const content = globalInput.value.trim();
         if (!content) return;
-        try {
-            const { error } = await supabase
-                .from('messages')
-                .insert([{ 
-                    sender: currentUser, 
-                    content,
-                    type: 'global',
-                    created_at: new Date().toISOString()
-                }]);
-            if (error) throw error;
+
+        if (isSuspended(currentUser)) {
+            showToast('Du er suspenderet og kan ikke sende beskeder', 'warning');
+            return;
+        }
+
+        const { error } = await sendMessage({
+            sender: currentUser,
+            content,
+            type: 'global',
+            receiver: null
+        });
+
+        if (error) {
+            console.error(error);
+            showToast('Kunne ikke sende besked', 'error');
+        } else {
             globalInput.value = '';
-        } catch (error) {
-            console.error('Fejl ved afsendelse:', error);
-            alert('Kunne ikke sende besked. Tjek din forbindelse.');
+            showToast('Besked sendt', 'success');
         }
     }
-
-    async function sendPrivateMessage() {
-        if (currentUserIsKicked) return alert('Du er kicked og kan ikke skrive.');
-        if (!activePrivateRecipient) return;
-        const content = privateInput.value.trim();
-        if (!content) return;
-        try {
-            const { error } = await supabase
-                .from('messages')
-                .insert([{ 
-                    sender: currentUser, 
-                    content,
-                    type: 'private', 
-                    recipient: activePrivateRecipient,
-                    created_at: new Date().toISOString()
-                }]);
-            if (error) throw error;
-            privateInput.value = '';
-        } catch (error) {
-            console.error('Fejl ved afsendelse af privat besked:', error);
-            alert('Kunne ikke sende privat besked.');
-        }
-    }
-
-    function openPrivateChat(recipient) {
-        activePrivateRecipient = recipient;
-        privateRecipientName.textContent = `💬 Privat med ${recipient}`;
-        privateMessagesDiv.innerHTML = '';
-        privateModal.style.display = 'flex';
-        loadPrivateHistory();
-    }
-
-    function closePrivateChat() {
-        privateModal.style.display = 'none';
-        activePrivateRecipient = null;
-        privateMessagesDiv.innerHTML = '';
-    }
-
-    function startTypingIndicator(isPrivate, isTyping) {
-        const channel = isPrivate ? privateChannel : globalChannel;
-        if (!channel) return;
-        channel.send({
-            type: 'broadcast',
-            event: isPrivate ? 'typing-private' : 'typing-global',
-            payload: {
-                username: currentUser,
-                recipient: isPrivate ? activePrivateRecipient : null,
-                typing: isTyping,
-            }
-        });
-    }
-
-    function updateTypingIndicator(text) {
-        let el = document.getElementById('typingIndicator');
-        if (!el) {
-            el = document.createElement('div');
-            el.id = 'typingIndicator';
-            el.className = 'typing-indicator';
-            document.querySelector('.chat-main').insertBefore(el, document.querySelector('.chat-input-area'));
-        }
-        el.textContent = text || '';
-        el.style.display = text ? 'block' : 'none';
-    }
-
-    function updatePrivateTypingIndicator(text) {
-        let el = document.getElementById('privateTypingIndicator');
-        if (!el) {
-            el = document.createElement('div');
-            el.id = 'privateTypingIndicator';
-            el.className = 'typing-indicator private';
-            const modal = document.querySelector('.modal');
-            modal.insertBefore(el, document.querySelector('.private-input-area'));
-        }
-        el.textContent = text || '';
-        el.style.display = text ? 'block' : 'none';
-    }
-
-    async function startRealtime() {
-        if (!currentUser) return;
-
-        if (globalChannel) await supabase.removeChannel(globalChannel);
-        if (privateChannel) await supabase.removeChannel(privateChannel);
-        if (presenceChannel) await supabase.removeChannel(presenceChannel);
-        if (kickedChannel) await supabase.removeChannel(kickedChannel);
-
-        globalChannel = supabase
-            .channel('global-messages')
-            .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'messages', filter: 'type=eq.global' }, (payload) => {
-                displayGlobalMessage(payload.new);
-            })
-            .on('postgres_changes', { event: 'DELETE', schema: 'public', table: 'messages', filter: 'type=eq.global' }, (payload) => {
-                removeMessagesFromDomById(payload.old.id);
-            })
-            .on('broadcast', { event: 'typing-global' }, ({ payload }) => {
-                if (!payload || payload.username === currentUser) return;
-                updateTypingIndicator(`${payload.username} skriver...`);
-                clearTimeout(typingTimeoutGlobal);
-                typingTimeoutGlobal = setTimeout(() => updateTypingIndicator(''), 1500);
-            })
-            .subscribe();
-
-        privateChannel = supabase
-            .channel('private-messages')
-            .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'messages', filter: 'type=eq.private' }, (payload) => {
-                const msg = payload.new;
-                if (activePrivateRecipient) displayPrivateMessage(msg);
-            })
-            .on('postgres_changes', { event: 'DELETE', schema: 'public', table: 'messages', filter: 'type=eq.private' }, (payload) => {
-                removeMessagesFromDomById(payload.old.id);
-            })
-            .on('broadcast', { event: 'typing-private' }, ({ payload }) => {
-                if (!payload || payload.username === currentUser) return;
-                if (payload.recipient !== currentUser) return;
-                updatePrivateTypingIndicator(`${payload.username} skriver privat...`);
-                clearTimeout(typingTimeoutPrivate);
-                typingTimeoutPrivate = setTimeout(() => updatePrivateTypingIndicator(''), 1500);
-            })
-            .subscribe();
-
-        presenceChannel = supabase.channel('online-users', {
-            config: {
-                presence: { key: currentUser },
-            },
-        });
-
-        presenceChannel
-            .on('presence', { event: 'sync' }, () => {
-                const state = presenceChannel.presenceState();
-                onlineUsers.clear();
-                Object.keys(state).forEach(key => {
-                    const presences = state[key];
-                    if (Array.isArray(presences)) {
-                        presences.forEach(p => {
-                            if (p.username) onlineUsers.set(p.username, { username: p.username });
-                        });
-                    }
-                });
-                renderOnlineUsers();
-            })
-            .on('presence', { event: 'join' }, ({ newPresences }) => {
-                newPresences.forEach(p => {
-                    if (p.username) onlineUsers.set(p.username, { username: p.username });
-                });
-                renderOnlineUsers();
-            })
-            .on('presence', { event: 'leave' }, ({ leftPresences }) => {
-                leftPresences.forEach(p => {
-                    if (p.username) onlineUsers.delete(p.username);
-                });
-                renderOnlineUsers();
-            })
-            .subscribe(async (status) => {
-                if (status === 'SUBSCRIBED') {
-                    await presenceChannel.track({
-                        username: currentUser,
-                        online_at: new Date().toISOString(),
-                    });
-                }
-            });
-
-        kickedChannel = supabase
-            .channel('kicked-users')
-            .on('postgres_changes', { event: '*', schema: 'public', table: 'kicked_users' }, () => {
-                loadKickedUsers();
-            })
-            .subscribe();
-
-        await Promise.all([loadGlobalHistory(), loadKickedUsers()]);
-    }
-
-    // Message action delegation
-    globalMessagesDiv.addEventListener('click', (e) => {
-        const deleteBtn = e.target.closest('.delete-message-btn');
-        if (!deleteBtn) return;
-        const messageId = deleteBtn.dataset.messageId;
-        if (!messageId) return;
-        deleteMessage(messageId);
-    });
-
-    privateMessagesDiv.addEventListener('click', (e) => {
-        const deleteBtn = e.target.closest('.delete-message-btn');
-        if (!deleteBtn) return;
-        const messageId = deleteBtn.dataset.messageId;
-        if (!messageId) return;
-        deleteMessage(messageId);
-    });
 
     sendGlobalBtn.addEventListener('click', sendGlobalMessage);
     globalInput.addEventListener('keypress', (e) => {
         if (e.key === 'Enter') sendGlobalMessage();
     });
-    globalInput.addEventListener('input', () => {
-        if (sentGlobalTyping) {
-            clearTimeout(typingTimeoutGlobal);
-        }
-        sentGlobalTyping = true;
-        startTypingIndicator(false, true);
-        clearTimeout(typingTimeoutGlobal);
-        typingTimeoutGlobal = setTimeout(() => {
-            sentGlobalTyping = false;
-            startTypingIndicator(false, false);
-            updateTypingIndicator('');
-        }, 700);
+
+    // ===== PRIVATE CHAT =====
+    function openPrivateChat(username) {
+        if (!username || username === currentUser) return;
+
+        currentPrivateUser = username;
+        privateChatTitle.textContent = `💬 Privat chat med ${username}`;
+        privateChatSubtitle.textContent = 'Kun jer to kan se beskederne';
+        privateChatModal.style.display = 'flex';
+
+        renderOnlineUsers();
+        refreshPrivateHistory();
+        setTimeout(() => privateMessageInput.focus(), 50);
+    }
+
+    closePrivateChatBtn.addEventListener('click', () => {
+        closeModal(privateChatModal);
+        currentPrivateUser = null;
+        privateMessages.innerHTML = '';
+        loadedPrivateMessageIds.clear();
+        renderOnlineUsers();
     });
+
+    async function displayPrivateMessage(msg, fromRealtime = false) {
+        if (loadedPrivateMessageIds.has(msg.id) || isSuspended(msg.sender)) return;
+        loadedPrivateMessageIds.add(msg.id);
+
+        const div = createMessageElement(msg, true);
+        privateMessages.appendChild(div);
+        privateMessages.scrollTop = privateMessages.scrollHeight;
+
+        if (fromRealtime && msg.sender !== currentUser) {
+            showToast(`Privat besked fra ${msg.sender}`, 'success');
+            if (document.hidden || privateChatModal.style.display !== 'flex' || currentPrivateUser !== msg.sender) {
+                notify(`Privat besked fra ${msg.sender}`, msg.content);
+            }
+        }
+    }
+
+    async function loadPrivateHistory(otherUser) {
+        const [sentRes, receivedRes] = await Promise.all([
+            supabase
+                .from('messages')
+                .select('*')
+                .eq('type', 'private')
+                .eq('sender', currentUser)
+                .eq('receiver', otherUser)
+                .order('created_at', { ascending: true })
+                .limit(100),
+            supabase
+                .from('messages')
+                .select('*')
+                .eq('type', 'private')
+                .eq('sender', otherUser)
+                .eq('receiver', currentUser)
+                .order('created_at', { ascending: true })
+                .limit(100)
+        ]);
+
+        if (sentRes.error) {
+            console.error('Fejl ved load af private sendte beskeder:', sentRes.error);
+        }
+        if (receivedRes.error) {
+            console.error('Fejl ved load af private modtagne beskeder:', receivedRes.error);
+        }
+
+        const all = [...(sentRes.data || []), ...(receivedRes.data || [])]
+            .sort((a, b) => new Date(a.created_at) - new Date(b.created_at));
+
+        privateMessages.innerHTML = '';
+        loadedPrivateMessageIds.clear();
+
+        all.forEach(msg => {
+            if (!isSuspended(msg.sender)) {
+                displayPrivateMessage(msg, false);
+            }
+        });
+
+        privateMessages.scrollTop = privateMessages.scrollHeight;
+    }
+
+    async function sendPrivateMessage() {
+        const content = privateMessageInput.value.trim();
+        if (!content || !currentPrivateUser) return;
+
+        if (isSuspended(currentUser)) {
+            showToast('Du er suspenderet og kan ikke sende beskeder', 'warning');
+            return;
+        }
+
+        const { error } = await sendMessage({
+            sender: currentUser,
+            receiver: currentPrivateUser,
+            content,
+            type: 'private'
+        });
+
+        if (error) {
+            console.error(error);
+            showToast('Kunne ikke sende privat besked', 'error');
+        } else {
+            privateMessageInput.value = '';
+            showToast('Privat besked sendt', 'success');
+        }
+    }
 
     sendPrivateBtn.addEventListener('click', sendPrivateMessage);
-    privateInput.addEventListener('keypress', (e) => {
+    privateMessageInput.addEventListener('keypress', (e) => {
         if (e.key === 'Enter') sendPrivateMessage();
     });
-    privateInput.addEventListener('input', () => {
-        if (!activePrivateRecipient) return;
-        if (sentPrivateTyping) {
-            clearTimeout(typingTimeoutPrivate);
-        }
-        sentPrivateTyping = true;
-        startTypingIndicator(true, true);
-        clearTimeout(typingTimeoutPrivate);
-        typingTimeoutPrivate = setTimeout(() => {
-            sentPrivateTyping = false;
-            startTypingIndicator(true, false);
-            updatePrivateTypingIndicator('');
-        }, 700);
-    });
 
-    closePrivateBtn.addEventListener('click', closePrivateChat);
-    privateModal.addEventListener('click', (e) => {
-        if (e.target === privateModal) closePrivateChat();
-    });
+    // ===== REALTIME =====
+    async function startRealtime() {
+        messageChannel = supabase
+            .channel('messages-realtime')
+            .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'messages', filter: 'type=eq.global' }, (payload) => {
+                displayGlobalMessage(payload.new, true);
+            })
+            .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'messages', filter: 'type=eq.private' }, (payload) => {
+                const msg = payload.new;
 
-    globalInput.addEventListener('blur', () => {
-        sentGlobalTyping = false;
-        startTypingIndicator(false, false);
-        updateTypingIndicator('');
-    });
-    privateInput.addEventListener('blur', () => {
-        sentPrivateTyping = false;
-        startTypingIndicator(true, false);
-        updatePrivateTypingIndicator('');
-    });
+                const relevantToCurrentPrivate =
+                    currentPrivateUser &&
+                    (
+                        (msg.sender === currentUser && msg.receiver === currentPrivateUser) ||
+                        (msg.receiver === currentUser && msg.sender === currentPrivateUser)
+                    );
 
-    setAdminUI();
-    initUsername();
+                if (relevantToCurrentPrivate) {
+                    displayPrivateMessage(msg, true);
+                } else if (msg.receiver === currentUser || msg.sender === currentUser) {
+                    showToast(`Privat besked med ${msg.sender === currentUser ? msg.receiver : msg.sender}`, 'info');
+                    if (document.hidden) {
+                        notify('Ny privat besked', msg.content);
+                    }
+                }
+            })
+            .on('postgres_changes', { event: 'DELETE', schema: 'public', table: 'messages' }, (payload) => {
+                removeMessageElementById(payload.old.id);
+            })
+            .subscribe();
+
+        presenceChannel = supabase.channel('online-users', {
+            config: { presence: { key: currentUser } }
+        });
+
+        presenceChannel
+            .on('presence', { event: 'sync' }, () => {
+                onlineUsers.clear();
+                const state = presenceChannel.presenceState();
+
+                Object.keys(state).forEach(key => {
+                    (state[key] || []).forEach(p => {
+                        if (p.username && !isSuspended(p.username)) {
+                            onlineUsers.set(p.username, { username: p.username });
+                        }
+                    });
+                });
+
+                renderOnlineUsers();
+            })
+            .subscribe(async (status) => {
+                if (status === 'SUBSCRIBED') {
+                    await presenceChannel.track({ username: currentUser });
+                }
+            });
+
+        await loadGlobalHistory();
+    }
+
+    function renderOnlineUsers() {
+        const users = Array.from(onlineUsers.values()).sort((a, b) => {
+            if (a.username === currentUser) return -1;
+            if (b.username === currentUser) return 1;
+            return a.username.localeCompare(b.username);
+        });
+
+        onlineUsersList.innerHTML = '';
+
+        users.forEach(u => {
+            const div = document.createElement('div');
+            div.className = `online-user ${currentPrivateUser === u.username ? 'active' : ''}`;
+            div.setAttribute('data-username', u.username);
+
+            div.innerHTML = `
+                <span class="online-dot"></span>
+                <span>${escapeHtml(u.username)}${u.username === currentUser ? ' (dig)' : ''}</span>
+            `;
+
+            if (u.username !== currentUser) {
+                div.addEventListener('click', () => openPrivateChat(u.username));
+            }
+
+            onlineUsersList.appendChild(div);
+        });
+
+        onlineCount.textContent = users.length;
+    }
+
+    initLogin();
 })();
