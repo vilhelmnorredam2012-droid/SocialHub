@@ -23,6 +23,7 @@
     usernameGroup: $("#usernameGroup"),
     currentUserLabel: $("#currentUserLabel"),
     logoutBtn: $("#logoutBtn"),
+    adminBtn: $("#adminBtn"),
     refreshBtn: $("#refreshBtn"),
     globalMessages: $("#globalMessages"),
     globalForm: $("#globalForm"),
@@ -37,7 +38,19 @@
     privateForm: $("#privateForm"),
     privateInput: $("#privateInput"),
     sendPrivateBtn: $("#sendPrivateBtn"),
-    closePrivateBtn: $("#closePrivateBtn")
+    closePrivateBtn: $("#closePrivateBtn"),
+    adminPanel: $("#adminPanel"),
+    adminLoginModal: $("#adminLoginModal"),
+    adminLoginForm: $("#adminLoginForm"),
+    adminPasswordInput: $("#adminPasswordInput"),
+    adminLoginBtn: $("#adminLoginBtn"),
+    adminLoginMessage: $("#adminLoginMessage"),
+    cancelAdminLoginBtn: $("#cancelAdminLoginBtn"),
+    closeAdminBtn: $("#closeAdminBtn"),
+    adminUserSearch: $("#adminUserSearch"),
+    adminUserList: $("#adminUserList"),
+    deleteAllMessagesBtn: $("#deleteAllMessagesBtn"),
+    adminStats: $("#adminStats")
   };
 
   let sb = null;
@@ -50,10 +63,16 @@
   let privateChannel = null;
   let heartbeatTimer = null;
   let startingApp = false;
+  let initDone = false;
+  let isAdmin = false;
+  let adminSearchTimeout = null;
 
   document.addEventListener("DOMContentLoaded", init);
 
   async function init() {
+    if (initDone) return;
+    initDone = true;
+
     bindEvents();
 
     const configError = getConfigError();
@@ -64,17 +83,20 @@
       return;
     }
 
-    sb = window.supabase.createClient(
-      window.SOCIALHUB_CONFIG.SUPABASE_URL,
-      window.SOCIALHUB_CONFIG.SUPABASE_ANON_KEY,
-      {
-        auth: {
-          autoRefreshToken: true,
-          persistSession: true,
-          detectSessionInUrl: true
+    // Opret Supabase client KUN en gang
+    if (!sb) {
+      sb = window.supabase.createClient(
+        window.SOCIALHUB_CONFIG.SUPABASE_URL,
+        window.SOCIALHUB_CONFIG.SUPABASE_ANON_KEY,
+        {
+          auth: {
+            autoRefreshToken: true,
+            persistSession: true,
+            detectSessionInUrl: true
+          }
         }
-      }
-    );
+      );
+    }
 
     sb.auth.onAuthStateChange(async (event, session) => {
       if (event === "SIGNED_OUT") {
@@ -89,6 +111,7 @@
 
     const { data, error } = await sb.auth.getSession();
     if (error) {
+      console.error("Session error:", error);
       showAuthMessage(formatSupabaseError(error), "error");
       return;
     }
@@ -108,13 +131,25 @@
 
     elements.authForm.addEventListener("submit", handleAuthSubmit);
     elements.logoutBtn.addEventListener("click", handleLogout);
+    elements.adminBtn.addEventListener("click", openAdminLogin);
     elements.refreshBtn.addEventListener("click", refreshAll);
     elements.globalForm.addEventListener("submit", sendGlobalMessage);
     elements.privateForm.addEventListener("submit", sendPrivateMessage);
     elements.closePrivateBtn.addEventListener("click", closePrivateChat);
 
+    // Admin event handlers
+    elements.adminLoginForm.addEventListener("submit", handleAdminLogin);
+    elements.cancelAdminLoginBtn.addEventListener("click", closeAdminLogin);
+    elements.closeAdminBtn.addEventListener("click", closeAdminPanel);
+    elements.adminUserSearch.addEventListener("input", debounceAdminSearch);
+    elements.deleteAllMessagesBtn.addEventListener("click", confirmDeleteAllMessages);
+
     elements.privateModal.addEventListener("click", (event) => {
       if (event.target === elements.privateModal) closePrivateChat();
+    });
+
+    elements.adminPanel.addEventListener("click", (event) => {
+      if (event.target === elements.adminPanel) closeAdminPanel();
     });
 
     window.addEventListener("beforeunload", () => {
@@ -389,6 +424,9 @@
     }, HEARTBEAT_MS);
   }
 
+  let globalMessagesLoadTimer = null;
+  let privateMessagesLoadTimer = null;
+  
   async function loadGlobalMessages() {
     setEmptyState(elements.globalMessages, "Indlæser beskeder...");
 
@@ -416,6 +454,14 @@
     }
 
     scrollToBottom(elements.globalMessages);
+  }
+
+  // Debounced version for realtime updates
+  function loadGlobalMessagesDebounced() {
+    clearTimeout(globalMessagesLoadTimer);
+    globalMessagesLoadTimer = setTimeout(() => {
+      loadGlobalMessages();
+    }, 200); // Vent 200ms før load
   }
 
   async function sendGlobalMessage(event) {
@@ -447,7 +493,7 @@
       if (error) throw error;
       elements.globalInput.value = "";
       showToast("✓ Besked sendt", "success");
-      await loadGlobalMessages();
+      // Lad realtime subscription loade den nye besked - ikke manuel reload
     } catch (error) {
       showToast(formatSupabaseError(error), "error");
     } finally {
@@ -459,16 +505,32 @@
   }
 
   function subscribeGlobalMessages() {
-    if (globalChannel) sb.removeChannel(globalChannel).catch(() => {});
+    // Ryd gamle subscription ordentligt
+    if (globalChannel) {
+      sb.removeChannel(globalChannel).catch((err) => {
+        console.log("Cleanup global channel:", err?.message || err);
+      });
+      globalChannel = null;
+    }
 
+    // Opret ny subscription
     globalChannel = sb
       .channel("socialhub-global-messages")
       .on(
         "postgres_changes",
         { event: "*", schema: "public", table: "global_messages" },
-        () => loadGlobalMessages()
+        (payload) => {
+          if (payload.eventType === "INSERT") {
+            loadGlobalMessagesDebounced();
+          }
+        }
       )
-      .subscribe();
+      .subscribe((status) => {
+        if (status === "CHANNEL_ERROR") {
+          console.error("Global messages subscription error");
+          setTimeout(subscribeGlobalMessages, 3000);
+        }
+      });
   }
 
   async function loadUsers() {
@@ -520,7 +582,12 @@
   }
 
   function subscribeProfiles() {
-    if (profilesChannel) sb.removeChannel(profilesChannel).catch(() => {});
+    if (profilesChannel) {
+      sb.removeChannel(profilesChannel).catch((err) => {
+        console.log("Cleanup profiles channel:", err?.message || err);
+      });
+      profilesChannel = null;
+    }
 
     profilesChannel = sb
       .channel("socialhub-profiles")
@@ -529,7 +596,12 @@
         { event: "*", schema: "public", table: "profiles" },
         () => loadUsers()
       )
-      .subscribe();
+      .subscribe((status) => {
+        if (status === "CHANNEL_ERROR") {
+          console.error("Profiles subscription error");
+          setTimeout(subscribeProfiles, 3000);
+        }
+      });
   }
 
   function openPrivateChat(user) {
@@ -588,6 +660,14 @@
     scrollToBottom(elements.privateMessages);
   }
 
+  // Debounced version for realtime updates
+  function loadPrivateMessagesDebounced() {
+    clearTimeout(privateMessagesLoadTimer);
+    privateMessagesLoadTimer = setTimeout(() => {
+      loadPrivateMessages();
+    }, 200); // Vent 200ms før load
+  }
+
   async function sendPrivateMessage(event) {
     event.preventDefault();
 
@@ -619,7 +699,7 @@
       if (error) throw error;
       elements.privateInput.value = "";
       showToast("✓ Privat besked sendt", "success");
-      await loadPrivateMessages();
+      // Lad realtime subscription loade den nye besked - ikke manuel reload
     } catch (error) {
       showToast(formatSupabaseError(error), "error");
     } finally {
@@ -631,7 +711,14 @@
   }
 
   function subscribePrivateMessages() {
-    if (privateChannel) sb.removeChannel(privateChannel).catch(() => {});
+    if (privateChannel) {
+      sb.removeChannel(privateChannel).catch((err) => {
+        console.log("Cleanup private channel:", err?.message || err);
+      });
+      privateChannel = null;
+    }
+
+    if (!selectedPrivateUser || !currentUser) return;
 
     privateChannel = sb
       .channel(`socialhub-private-${currentUser.id}-${selectedPrivateUser.id}`)
@@ -647,15 +734,20 @@
             (row.sender_id === selectedPrivateUser.id && row.receiver_id === currentUser.id);
 
           if (isCurrentConversation) {
-            // Hvis beskeden er sendt af andre brugere til mig, vis toast
+            // Toast kun ved nye beskeder fra andre
             if (payload.eventType === "INSERT" && row.receiver_id === currentUser.id && row.sender_id === selectedPrivateUser.id) {
               showToast(`💬 Ny besked fra @${row.sender_username}`, "info");
             }
-            loadPrivateMessages();
+            loadPrivateMessagesDebounced();
           }
         }
       )
-      .subscribe();
+      .subscribe((status) => {
+        if (status === "CHANNEL_ERROR") {
+          console.error("Private messages subscription error");
+          setTimeout(subscribePrivateMessages, 3000);
+        }
+      });
   }
 
   function createMessageElement(message, type) {
@@ -890,4 +982,303 @@
     div.textContent = String(text || "");
     return div.innerHTML;
   }
+
+  // ═══════════════════════════════════════════════════════════════════════
+  // ADMIN FUNKTIONER
+  // ═══════════════════════════════════════════════════════════════════════
+
+  function openAdminLogin() {
+    elements.adminLoginModal.hidden = false;
+    elements.adminPasswordInput.value = "";
+    elements.adminLoginMessage.textContent = "";
+    elements.adminPasswordInput.focus();
+  }
+
+  function closeAdminLogin() {
+    elements.adminLoginModal.hidden = true;
+    elements.adminPasswordInput.value = "";
+    elements.adminLoginMessage.textContent = "";
+  }
+
+  async function handleAdminLogin(event) {
+    event.preventDefault();
+
+    const password = elements.adminPasswordInput.value;
+    if (!password) {
+      elements.adminLoginMessage.textContent = "Indtast adgangskode";
+      elements.adminLoginMessage.className = "auth-message error";
+      return;
+    }
+
+    elements.adminLoginBtn.disabled = true;
+    elements.adminLoginBtn.textContent = "Verificerer...";
+
+    try {
+      const { data, error } = await sb.rpc("verify_admin_password", {
+        input_password: password
+      });
+
+      if (error) throw error;
+
+      if (!data) {
+        throw new Error("Forkert adgangskode");
+      }
+
+      isAdmin = true;
+      closeAdminLogin();
+      openAdminPanel();
+      showToast("✓ Admin login succesfuldt", "success");
+    } catch (error) {
+      elements.adminLoginMessage.textContent = "❌ Forkert adgangskode";
+      elements.adminLoginMessage.className = "auth-message error";
+    } finally {
+      elements.adminLoginBtn.disabled = false;
+      elements.adminLoginBtn.textContent = "Log ind som Admin";
+    }
+  }
+
+  async function openAdminPanel() {
+    if (!isAdmin) {
+      showToast("❌ Du er ikke admin", "error");
+      return;
+    }
+
+    elements.adminPanel.hidden = false;
+    elements.adminUserSearch.value = "";
+    elements.adminUserList.innerHTML = "";
+    elements.adminStats.innerHTML = "<p>Indlæser statistik...</p>";
+
+    await loadAdminStats();
+  }
+
+  function closeAdminPanel() {
+    elements.adminPanel.hidden = true;
+    isAdmin = false;
+  }
+
+  async function loadAdminStats() {
+    try {
+      const { data: profiles, error: profileError } = await sb
+        .from("profiles")
+        .select("status")
+        .is("status", null)
+        .then(() =>
+          sb.from("profiles").select("status")
+        );
+
+      const { data: globalMsgs } = await sb
+        .from("global_messages")
+        .select("id", { count: "exact" });
+
+      const { data: privateMsgs } = await sb
+        .from("private_messages")
+        .select("id", { count: "exact" });
+
+      const allProfiles = await sb.from("profiles").select("status");
+      
+      const stats = {
+        total_users: allProfiles.data?.length || 0,
+        active_users: allProfiles.data?.filter(p => p.status === "active").length || 0,
+        suspended: allProfiles.data?.filter(p => p.status === "suspended").length || 0,
+        blocked: allProfiles.data?.filter(p => p.status === "blocked").length || 0,
+        global_messages: globalMsgs.data?.length || 0,
+        private_messages: privateMsgs.data?.length || 0
+      };
+
+      renderAdminStats(stats);
+    } catch (error) {
+      elements.adminStats.innerHTML = `<p class="empty-state">${escapeHtml(formatSupabaseError(error))}</p>`;
+    }
+  }
+
+  function renderAdminStats(stats) {
+    elements.adminStats.innerHTML = `
+      <div class="admin-stat-item">
+        <strong>${stats.total_users}</strong>
+        <small>Total brugere</small>
+      </div>
+      <div class="admin-stat-item">
+        <strong>${stats.active_users}</strong>
+        <small>Aktive</small>
+      </div>
+      <div class="admin-stat-item">
+        <strong>${stats.suspended}</strong>
+        <small>Suspenderet</small>
+      </div>
+      <div class="admin-stat-item">
+        <strong>${stats.blocked}</strong>
+        <small>Blokeret</small>
+      </div>
+      <div class="admin-stat-item">
+        <strong>${stats.global_messages}</strong>
+        <small>Global beskeder</small>
+      </div>
+      <div class="admin-stat-item">
+        <strong>${stats.private_messages}</strong>
+        <small>Private beskeder</small>
+      </div>
+    `;
+  }
+
+  function debounceAdminSearch() {
+    clearTimeout(adminSearchTimeout);
+    adminSearchTimeout = setTimeout(() => {
+      searchAdminUsers();
+    }, 300);
+  }
+
+  async function searchAdminUsers() {
+    const query = elements.adminUserSearch.value.trim();
+    
+    if (!query) {
+      elements.adminUserList.innerHTML = "";
+      return;
+    }
+
+    try {
+      const { data, error } = await sb
+        .from("profiles")
+        .select("id, username, status")
+        .or(`username.ilike.%${query}%,id.eq.${query}`)
+        .limit(20);
+
+      if (error) throw error;
+
+      renderAdminUserList(data || []);
+    } catch (error) {
+      elements.adminUserList.innerHTML = `<p class="empty-state">${escapeHtml(formatSupabaseError(error))}</p>`;
+    }
+  }
+
+  function renderAdminUserList(users) {
+    if (users.length === 0) {
+      elements.adminUserList.innerHTML = '<p class="empty-state">Ingen brugere fundet</p>';
+      return;
+    }
+
+    elements.adminUserList.innerHTML = users.map(user => `
+      <div class="admin-user-item">
+        <div class="admin-user-info">
+          <strong>@${escapeHtml(user.username)}</strong>
+          <small>${user.id.substring(0, 8)}...</small>
+        </div>
+        <span class="admin-user-status ${user.status}">${user.status}</span>
+        <div class="admin-user-actions">
+          ${user.status === "active" ? `
+            <button class="btn btn-secondary btn-small" onclick="adminSuspendUser('${user.id}', '${escapeHtml(user.username)}')">Suspender</button>
+            <button class="btn btn-danger btn-small" onclick="adminBlockUser('${user.id}', '${escapeHtml(user.username)}')">Blokér</button>
+          ` : `
+            <button class="btn btn-secondary btn-small" onclick="adminActivateUser('${user.id}', '${escapeHtml(user.username)}')">Aktivér</button>
+          `}
+          <button class="btn btn-danger btn-small" onclick="adminDeleteUserMessages('${user.id}', '${escapeHtml(user.username)}')">Slet beskeder</button>
+        </div>
+      </div>
+    `).join("");
+  }
+
+  async function adminSuspendUser(userId, username) {
+    if (!confirm(`Suspender @${username}? De kan logge ind men ikke skrive.`)) return;
+
+    try {
+      const { data, error } = await sb.rpc("set_user_status", {
+        target_user_id: userId,
+        new_status: "suspended",
+        reason: "Suspended by admin"
+      });
+
+      if (error) throw error;
+
+      showToast(`✓ @${username} suspenderet`, "success");
+      await searchAdminUsers();
+      await loadAdminStats();
+    } catch (error) {
+      showToast(formatSupabaseError(error), "error");
+    }
+  }
+
+  async function adminBlockUser(userId, username) {
+    if (!confirm(`Blokér @${username} fuldstændig? De kan ikke logge ind.`)) return;
+
+    try {
+      const { data, error } = await sb.rpc("set_user_status", {
+        target_user_id: userId,
+        new_status: "blocked",
+        reason: "Blocked by admin"
+      });
+
+      if (error) throw error;
+
+      showToast(`✓ @${username} blokeret`, "success");
+      await searchAdminUsers();
+      await loadAdminStats();
+    } catch (error) {
+      showToast(formatSupabaseError(error), "error");
+    }
+  }
+
+  async function adminActivateUser(userId, username) {
+    if (!confirm(`Reaktiver @${username}?`)) return;
+
+    try {
+      const { data, error } = await sb.rpc("set_user_status", {
+        target_user_id: userId,
+        new_status: "active",
+        reason: null
+      });
+
+      if (error) throw error;
+
+      showToast(`✓ @${username} reaktiveret`, "success");
+      await searchAdminUsers();
+      await loadAdminStats();
+    } catch (error) {
+      showToast(formatSupabaseError(error), "error");
+    }
+  }
+
+  async function adminDeleteUserMessages(userId, username) {
+    if (!confirm(`Slet ALLE beskeder fra @${username}? Dette kan ikke fortrydes.`)) return;
+
+    try {
+      const { data, error } = await sb.rpc("delete_user_messages", {
+        target_user_id: userId
+      });
+
+      if (error) throw error;
+
+      showToast(`✓ Beskeder fra @${username} slettet (${data.total_deleted} beskeder)`, "success");
+      await searchAdminUsers();
+      await loadAdminStats();
+    } catch (error) {
+      showToast(formatSupabaseError(error), "error");
+    }
+  }
+
+  async function confirmDeleteAllMessages() {
+    if (!confirm("⚠️ SLET ALLE BESKEDER I SYSTEMET? Dette kan IKKE fortrydes!")) return;
+    if (!confirm("Er du helt sikker? ALLE beskeder bliver slettet for ALLE brugere!")) return;
+
+    elements.deleteAllMessagesBtn.disabled = true;
+    elements.deleteAllMessagesBtn.textContent = "Sletter...";
+
+    try {
+      const { data, error } = await sb.rpc("delete_all_messages");
+
+      if (error) throw error;
+
+      showToast(`✓ ${data.total_deleted} beskeder slettet`, "success");
+      await loadAdminStats();
+    } catch (error) {
+      showToast(formatSupabaseError(error), "error");
+    } finally {
+      elements.deleteAllMessagesBtn.disabled = false;
+      elements.deleteAllMessagesBtn.textContent = "Slet ALLE beskeder";
+    }
+  }
+
+  // Gør admin funktioner globale så HTML kan kalde dem
+  window.adminSuspendUser = adminSuspendUser;
+  window.adminBlockUser = adminBlockUser;
+  window.adminActivateUser = adminActivateUser;
+  window.adminDeleteUserMessages = adminDeleteUserMessages;
 })();
