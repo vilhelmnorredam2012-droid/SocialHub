@@ -108,3 +108,113 @@
   <script src="app.js"></script>
 </body>
 </html>
+<!DOCTYPE html>
+<html lang="da">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta name="description" content="SocialHub - global chat og privat chat med Supabase" />
+  <title>SocialHub</title>
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <div id="toast" class="toast" role="status" aria-live="polite"></div>
+
+  <main id="authScreen" class="auth-screen">
+    <section class="auth-card" aria-labelledby="authTitle">
+      <div class="brand-mark">SH</div>
+      <h1 id="authTitle">SocialHub</h1>
+      <p id="authSubtitle">Log ind for at chatte med andre brugere.</p>
+
+      <form id="authForm" class="auth-form" autocomplete="on">
+        <label class="field-label" for="emailInput">Email</label>
+        <input id="emailInput" name="email" type="email" placeholder="din@email.dk" autocomplete="email" required />
+
+        <label class="field-label" for="passwordInput">Adgangskode</label>
+        <input id="passwordInput" name="password" type="password" placeholder="Mindst 6 tegn" autocomplete="current-password" required minlength="6" />
+
+        <div id="usernameGroup" class="username-group" hidden>
+          <label class="field-label" for="usernameInput">Brugernavn</label>
+          <input id="usernameInput" name="username" type="text" placeholder="Dit brugernavn" autocomplete="username" maxlength="24" />
+        </div>
+
+        <button id="authSubmitBtn" class="btn btn-primary" type="submit">Log ind</button>
+      </form>
+
+      <button id="toggleAuthBtn" class="btn btn-ghost" type="button">Opret konto i stedet</button>
+      <p id="authMessage" class="auth-message"></p>
+    </section>
+  </main>
+
+  <div id="appShell" class="app-shell" hidden>
+    <header class="topbar">
+      <div class="topbar-brand">
+        <div class="brand-mark brand-mark-small">SH</div>
+        <div>
+          <h1>SocialHub</h1>
+          <p>Global chat + privat chat</p>
+        </div>
+      </div>
+
+      <div class="topbar-actions">
+        <span id="currentUserLabel" class="current-user"></span>
+        <button id="logoutBtn" class="btn btn-secondary" type="button">Log ud</button>
+      </div>
+    </header>
+
+    <section class="layout">
+      <section class="panel chat-panel" aria-labelledby="globalTitle">
+        <div class="panel-header">
+          <div>
+            <h2 id="globalTitle">🌐 Global chat</h2>
+            <p>Alle beskeder bliver gemt i Supabase.</p>
+          </div>
+          <button id="refreshBtn" class="btn btn-secondary btn-small" type="button">Opdater</button>
+        </div>
+
+        <div id="globalMessages" class="messages" aria-live="polite"></div>
+
+        <form id="globalForm" class="message-form">
+          <input id="globalInput" type="text" placeholder="Skriv en besked..." autocomplete="off" maxlength="500" required />
+          <button id="sendGlobalBtn" class="btn btn-primary" type="submit">Send</button>
+        </form>
+      </section>
+
+      <aside class="panel users-panel" aria-labelledby="usersTitle">
+        <div class="panel-header compact">
+          <div>
+            <h2 id="usersTitle">👥 Brugere</h2>
+            <p><span id="onlineCount">0</span> online</p>
+          </div>
+        </div>
+
+        <div class="users-note">Klik på en bruger for at åbne privat chat.</div>
+        <div id="usersList" class="users-list"></div>
+      </aside>
+    </section>
+  </div>
+
+  <section id="privateModal" class="modal-overlay" hidden aria-modal="true" role="dialog" aria-labelledby="privateTitle">
+    <div class="private-modal">
+      <div class="private-header">
+        <div>
+          <h2 id="privateTitle">Privat chat</h2>
+          <p id="privateSubtitle"></p>
+        </div>
+        <button id="closePrivateBtn" class="icon-btn" type="button" aria-label="Luk privat chat">×</button>
+      </div>
+
+      <div id="privateMessages" class="messages private-messages" aria-live="polite"></div>
+
+      <form id="privateForm" class="message-form">
+        <input id="privateInput" type="text" placeholder="Skriv privat besked..." autocomplete="off" maxlength="500" required />
+        <button id="sendPrivateBtn" class="btn btn-primary" type="submit">Send</button>
+      </form>
+    </div>
+  </section>
+
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+  <script src="config.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>
