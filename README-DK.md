@@ -56,6 +56,120 @@ Hvis du vil have brugere direkte ind efter oprettelse:
 
 Hvis email-confirmation er slået til, skal brugeren bekræfte sin email før login.
 
+## 5. Nye features: Notifikationer og automatisk sletning
+
+### Toast notifikationer
+Appen viser nu toast-beskeder når:
+- Du logger ind: "Velkommen tilbage! 👋"
+- Du opretter en ny konto: "Konto oprettet! Velkommen til SocialHub. 🎉"
+- Du får en ny privat besked: "💬 Ny besked fra @brugernavn"
+
+### Automatisk sletning af gamle beskeder
+Beskeder slettes automatisk efter 7 dage for at holde databasen ren.
+
+**Tre måder at aktivere cleanup:**
+
+**Option 1: Kør cleanup script i Supabase (NEM)**
+1. Åbn Supabase → SQL Editor
+2. Opret en ny query
+3. Kopier alt fra `supabase-cleanup.sql` ind
+4. Tryk **Run**
+5. Bagefter kører du denne kommando en gang om dagen (eller når du ønsker):
+```sql
+SELECT public.cleanup_old_messages();
+```
+
+**Option 2: Aktivér pg_cron (ANBEFALET for Supabase Pro)**
+Hvis dit projekt har `pg_cron` extension (Supabase Pro), kan du aktivere automatisk daglig cleanup:
+```sql
+select cron.schedule('cleanup_socialhub_messages', '0 2 * * *', 'select public.cleanup_old_messages()');
+```
+Dette kører cleanup hver dag klokken 02:00 UTC.
+
+**Option 3: App kalder cleanup ved login (AKTIV)**
+Appen kalder automatisk `cleanup_old_messages()` når du logger ind. Dette virker hvis du har kørt cleanup-scriptet.
+
+## 6. Lokal test
+
+Du kan teste lokalt ved at åbne `index.html`, men realtime/auth virker bedst via Netlify eller en lokal webserver.
+
+Eksempel:
+
+```bash
+python3 -m http.server 5173
+```
+
+Åbn derefter:
+
+```text
+http://localhost:5173
+```
+
+## 7. Hvis noget stadig fejler
+
+Tjek først disse tre ting:
+
+1. Har du kørt `supabase-setup.sql`?
+2. Har du indsat den rigtige `SUPABASE_URL` og `SUPABASE_ANON_KEY` i `config.js`?
+3. Kommer URL og anon key fra samme Supabase-projekt?
+# SocialHub fixed version
+
+Denne version er lavet til Netlify + Supabase og indeholder:
+
+- Email/adgangskode login via Supabase Auth
+- Opret konto med brugernavn
+- Automatisk profil-oprettelse via Supabase trigger
+- Global chat
+- Privat chat mellem brugere
+- Online/offline status
+- Realtime-opdateringer
+- RLS policies, så brugere kun kan slette deres egne beskeder
+- Ren `index.html` uden duplikerede HTML-dokumenter
+
+## 1. Sæt Supabase op
+
+1. Gå til Supabase.
+2. Åbn dit projekt.
+3. Gå til **SQL Editor**.
+4. Opret en ny query.
+5. Kopiér alt fra `supabase-setup.sql` ind.
+6. Tryk **Run**.
+
+Dette opretter tabellerne:
+
+- `profiles`
+- `global_messages`
+- `private_messages`
+
+## 2. Indsæt din Supabase config
+
+Åbn `config.js` og erstat:
+
+```js
+SUPABASE_URL: "https://kglluoywbhirrewhyrrk.supabase.co",
+SUPABASE_ANON_KEY: "PASTE_YOUR_REAL_SUPABASE_ANON_PUBLIC_KEY_HERE"
+```
+
+med dine egne værdier fra:
+
+**Supabase → Project Settings → API**
+
+Brug:
+
+- **Project URL**
+- **anon public key**
+
+Vigtigt: Den anon key, der lå i den gamle ZIP, matchede ikke projekt-URL'en og virkede derfor ikke korrekt.
+
+## 3. Auth settings
+
+Hvis du vil have brugere direkte ind efter oprettelse:
+
+1. Supabase → Authentication → Providers → Email
+2. Slå **Confirm email** fra
+
+Hvis email-confirmation er slået til, skal brugeren bekræfte sin email før login.
+
 ## 4. Netlify deployment
 
 Upload hele mappen til GitHub eller drag-and-drop mappen til Netlify.
