@@ -1,286 +1,110 @@
 <!DOCTYPE html>
 <html lang="da">
 <head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Chat App</title>
-  <link rel="stylesheet" href="style.css">
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta name="description" content="SocialHub - global chat og privat chat med Supabase" />
+  <title>SocialHub</title>
+  <link rel="stylesheet" href="style.css" />
 </head>
 <body>
-  <div id="app">
-    <!-- Login/registrering -->
-    <div id="auth-container">
-      <div class="auth-card">
-        <h1>💬 Chat App</h1>
-        <p class="subtitle">Log ind eller opret en konto for at komme i gang</p>
-        <form id="auth-form">
-          <input type="email" id="email" placeholder="Din email" required>
-          <input type="password" id="password" placeholder="Adgangskode" required>
-          <input type="text" id="username" placeholder="Brugernavn (kun ved oprettelse)">
-          <button type="submit" id="auth-submit">Log ind</button>
-          <button type="button" id="toggle-auth-mode">Opret konto i stedet</button>
+  <div id="toast" class="toast" role="status" aria-live="polite"></div>
+
+  <main id="authScreen" class="auth-screen">
+    <section class="auth-card" aria-labelledby="authTitle">
+      <div class="brand-mark">SH</div>
+      <h1 id="authTitle">SocialHub</h1>
+      <p id="authSubtitle">Log ind for at chatte med andre brugere.</p>
+
+      <form id="authForm" class="auth-form" autocomplete="on">
+        <label class="field-label" for="emailInput">Email</label>
+        <input id="emailInput" name="email" type="email" placeholder="din@email.dk" autocomplete="email" required />
+
+        <label class="field-label" for="passwordInput">Adgangskode</label>
+        <input id="passwordInput" name="password" type="password" placeholder="Mindst 6 tegn" autocomplete="current-password" required minlength="6" />
+
+        <div id="usernameGroup" class="username-group" hidden>
+          <label class="field-label" for="usernameInput">Brugernavn</label>
+          <input id="usernameInput" name="username" type="text" placeholder="Dit brugernavn" autocomplete="username" maxlength="24" />
+        </div>
+
+        <button id="authSubmitBtn" class="btn btn-primary" type="submit">Log ind</button>
+      </form>
+
+      <button id="toggleAuthBtn" class="btn btn-ghost" type="button">Opret konto i stedet</button>
+      <p id="authMessage" class="auth-message"></p>
+    </section>
+  </main>
+
+  <div id="appShell" class="app-shell" hidden>
+    <header class="topbar">
+      <div class="topbar-brand">
+        <div class="brand-mark brand-mark-small">SH</div>
+        <div>
+          <h1>SocialHub</h1>
+          <p>Global chat + privat chat</p>
+        </div>
+      </div>
+
+      <div class="topbar-actions">
+        <span id="currentUserLabel" class="current-user"></span>
+        <button id="logoutBtn" class="btn btn-secondary" type="button">Log ud</button>
+      </div>
+    </header>
+
+    <section class="layout">
+      <section class="panel chat-panel" aria-labelledby="globalTitle">
+        <div class="panel-header">
+          <div>
+            <h2 id="globalTitle">🌐 Global chat</h2>
+            <p>Alle beskeder bliver gemt i Supabase.</p>
+          </div>
+          <button id="refreshBtn" class="btn btn-secondary btn-small" type="button">Opdater</button>
+        </div>
+
+        <div id="globalMessages" class="messages" aria-live="polite"></div>
+
+        <form id="globalForm" class="message-form">
+          <input id="globalInput" type="text" placeholder="Skriv en besked..." autocomplete="off" maxlength="500" required />
+          <button id="sendGlobalBtn" class="btn btn-primary" type="submit">Send</button>
         </form>
-        <p id="auth-error"></p>
-      </div>
-    </div>
+      </section>
 
-    <!-- Hovedapp (skjult indtil login) -->
-    <div id="main-app">
-      <header>
-        <h1>💬 Global Chat</h1>
-        <div id="user-info">
-          <span id="current-username"></span>
-          <button type="button" id="logout-btn">Log ud</button>
-          <button type="button" id="admin-btn">👨‍💼 Admin</button>
+      <aside class="panel users-panel" aria-labelledby="usersTitle">
+        <div class="panel-header compact">
+          <div>
+            <h2 id="usersTitle">👥 Brugere</h2>
+            <p><span id="onlineCount">0</span> online</p>
+          </div>
         </div>
-      </header>
-      <div id="content">
-        <div id="global-chat">
-          <h2>Global Chat</h2>
-          <div id="global-messages"></div>
-          <form id="global-message-form">
-            <input type="text" id="global-input" placeholder="Skriv en besked..." autocomplete="off">
-            <button type="submit">Send</button>
-          </form>
-        </div>
-        <div id="online-panel">
-          <h2>Online Brugere</h2>
-          <ul id="online-list"></ul>
-        </div>
-      </div>
-    </div>
 
-    <!-- Admin adgangskode modal -->
-    <div id="admin-password-modal" class="modal">
-      <div class="modal-content">
-        <button type="button" class="close" id="close-admin-password">&times;</button>
-        <h3>Admin Adgangskode</h3>
-        <input type="password" id="admin-password-input" placeholder="Adgangskode">
-        <button type="button" id="admin-password-submit">OK</button>
-      </div>
-    </div>
-
-    <!-- Admin panel modal -->
-    <div id="admin-panel-modal" class="modal">
-      <div class="modal-content large">
-        <button type="button" class="close" id="close-admin-panel">&times;</button>
-        <h3>Admin Panel - Håndter Brugere</h3>
-        <div id="admin-users-list"></div>
-      </div>
-    </div>
-
-    <!-- Privat chat modal -->
-    <div id="private-chat-modal" class="modal">
-      <div class="modal-content">
-        <button type="button" class="close" id="close-private-chat">&times;</button>
-        <h3 id="private-chat-title">Privat Chat</h3>
-        <div id="private-messages"></div>
-        <form id="private-message-form">
-          <input type="text" id="private-input" placeholder="Skriv en besked..." autocomplete="off">
-          <button type="submit">Send</button>
-        </form>
-      </div>
-    </div>
+        <div class="users-note">Klik på en bruger for at åbne privat chat.</div>
+        <div id="usersList" class="users-list"></div>
+      </aside>
+    </section>
   </div>
 
+  <section id="privateModal" class="modal-overlay" hidden aria-modal="true" role="dialog" aria-labelledby="privateTitle">
+    <div class="private-modal">
+      <div class="private-header">
+        <div>
+          <h2 id="privateTitle">Privat chat</h2>
+          <p id="privateSubtitle"></p>
+        </div>
+        <button id="closePrivateBtn" class="icon-btn" type="button" aria-label="Luk privat chat">×</button>
+      </div>
+
+      <div id="privateMessages" class="messages private-messages" aria-live="polite"></div>
+
+      <form id="privateForm" class="message-form">
+        <input id="privateInput" type="text" placeholder="Skriv privat besked..." autocomplete="off" maxlength="500" required />
+        <button id="sendPrivateBtn" class="btn btn-primary" type="submit">Send</button>
+      </form>
+    </div>
+  </section>
+
   <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+  <script src="config.js"></script>
   <script src="app.js"></script>
-</body>
-</html><!DOCTYPE html>
-<html lang="da">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>SocialHub</title>
-    <link rel="stylesheet" href="style.css">
-    <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
-</head>
-<body>
-    <div id="toastContainer" class="toast-container"></div>
-
-    <!-- Login Modal -->
-    <div id="loginModal" class="modal-overlay">
-        <div class="modal-card">
-            <h1>🚀 SocialHub</h1>
-            <p>Hvad hedder du?</p>
-            <input type="text" id="usernameInput" placeholder="Dit brugernavn" maxlength="20" autofocus>
-            <button class="btn btn-primary" id="loginBtn">Log ind</button>
-        </div>
-    </div>
-
-    <!-- Main App -->
-    <div id="app" class="app" style="display: none;">
-        <!-- Center - Main Chat -->
-        <div class="chat-container">
-            <div class="chat-header">
-                <h1>💬 SocialHub</h1>
-                <div class="user-info" id="userInfo"></div>
-            </div>
-
-            <div class="messages" id="globalMessages"></div>
-
-            <div class="chat-input-area">
-                <input type="text" id="globalInput" placeholder="Skriv besked..." autocomplete="off">
-                <button class="btn btn-icon btn-send" id="sendGlobalBtn">➤</button>
-            </div>
-        </div>
-
-        <!-- Right Sidebar - Online & Admin -->
-        <div class="sidebar-right">
-            <div class="sidebar-header">
-                <h3>👥 Online</h3>
-                <span class="online-count" id="onlineCount">0</span>
-            </div>
-
-            <div class="online-list" id="onlineUsersList"></div>
-
-            <!-- Admin Panel -->
-            <div class="admin-panel" id="adminPanel" style="display: none;">
-                <h3>⚙️ Admin</h3>
-                <button class="btn btn-primary btn-block" id="adminDashboardBtn">Admin Dashboard</button>
-            </div>
-
-            <div class="user-menu">
-                <button class="btn btn-block" id="logoutBtn">Log ud</button>
-            </div>
-        </div>
-    </div>
-
-    <!-- Private Chat Modal -->
-    <div id="privateChatModal" class="modal-overlay" style="display: none;">
-        <div class="private-chat-content">
-            <div class="private-chat-header">
-                <div>
-                    <h3 id="privateChatTitle">Privat chat</h3>
-                    <p class="private-chat-subtitle" id="privateChatSubtitle"></p>
-                </div>
-                <button class="close-btn" id="closePrivateChatBtn">&times;</button>
-            </div>
-            <div class="private-messages" id="privateMessages"></div>
-            <div class="private-chat-input-area">
-                <input type="text" id="privateMessageInput" placeholder="Skriv privat besked..." maxlength="500">
-                <button class="btn btn-primary btn-small" id="sendPrivateBtn">Send</button>
-            </div>
-        </div>
-    </div>
-
-    <!-- Admin Dashboard Modal -->
-    <div id="adminModal" class="modal-overlay" style="display: none;">
-        <div class="admin-modal-content">
-            <div class="admin-modal-header">
-                <h2>⚙️ Admin Dashboard</h2>
-                <button class="close-btn" id="closeAdminBtn">&times;</button>
-            </div>
-
-            <div class="admin-modal-body">
-                <div class="admin-section">
-                    <h3>📊 Statistik</h3>
-                    <div class="admin-stats">
-                        <div class="stat-box"><div class="stat-label">Brugere</div><div class="stat-value" id="statUsers">0</div></div>
-                        <div class="stat-box"><div class="stat-label">Kommentarer</div><div class="stat-value" id="statComments">0</div></div>
-                        <div class="stat-box"><div class="stat-label">Beskeder</div><div class="stat-value" id="statMessages">0</div></div>
-                    </div>
-                </div>
-
-                <div class="admin-section">
-                    <h3>👥 Brugere</h3>
-                    <div id="adminUsersList" class="admin-users-list"></div>
-                </div>
-
-                <div class="admin-section">
-                    <h3>📝 Indhold</h3>
-                    <div class="admin-actions">
-                        <button class="btn btn-danger" id="adminDeleteCommentsBtn">🗑 Slet alle kommentarer</button>
-                        <button class="btn btn-danger" id="adminDeleteLikesBtn">🗑 Slet alle likes</button>
-                        <button class="btn btn-danger" id="adminDeleteMessagesBtn">🗑 Slet alle beskeder</button>
-                    </div>
-                </div>
-
-                <div class="admin-section">
-                    <h3>🚫 Moderation</h3>
-                    <div class="admin-actions">
-                        <button class="btn btn-warning" id="adminSuspendUserBtn">⛔ Suspender bruger</button>
-                        <button class="btn btn-warning" id="adminClearUserDataBtn">🗑 Slet brugers data</button>
-                        <button class="btn btn-success" id="adminUnsuspendAllBtn">✅ Ophæv alle suspenderinger</button>
-                    </div>
-                </div>
-
-                <div class="admin-section danger-section">
-                    <h3>⚠️ Farlige operationer</h3>
-                    <div class="admin-actions">
-                        <button class="btn btn-danger btn-block" id="adminNukeBtn">💣 SLET ALT (uigenkaldeligt)</button>
-                    </div>
-                </div>
-            </div>
-        </div>
-    </div>
-
-    <script src="app.js"></script>
-</body>
-</html><!DOCTYPE html>
-<html lang="da">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>KlasseChat – Real-time</title>
-    <link rel="stylesheet" href="style.css">
-    <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
-</head>
-<body>
-    <div id="nameModal" class="name-overlay">
-        <div class="name-card">
-            <h2>Velkommen!</h2>
-            <p>Vælg et navn for at chatte</p>
-            <input type="text" id="nameInput" placeholder="Dit navn" maxlength="20" autofocus>
-            <button class="btn btn-block" id="saveNameBtn">Gå til chat</button>
-        </div>
-    </div>
-
-    <div id="app" class="app" style="display: none;">
-        <div class="chat-main">
-            <div class="chat-header">
-                <h2>🌐 Klassechat</h2>
-                <span class="online-badge" id="onlineCount">0 online</span>
-            </div>
-            <div class="messages" id="globalMessages"></div>
-            <div class="typing-indicator" id="typingIndicator" style="display:none;"></div>
-            <div class="chat-input-area">
-                <input type="text" id="globalInput" placeholder="Skriv din besked…" autocomplete="off">
-                <button class="btn btn-icon" id="sendGlobalBtn">➤</button>
-            </div>
-        </div>
-        <div class="sidebar">
-            <h3>👥 Online nu</h3>
-            <div class="online-list" id="onlineUsersList"></div>
-
-            <div class="admin-box">
-                <div class="admin-title">Admin</div>
-                <div class="admin-status" id="adminStatus">Admin er låst</div>
-                <input type="password" id="adminCodeInput" placeholder="Kode">
-                <button class="btn btn-block" id="unlockAdminBtn">Lås op</button>
-                <div class="admin-panel" id="adminPanel">
-                    <button class="btn btn-block danger-btn" id="adminDeleteAllBtn">Slet alle beskeder</button>
-                    <button class="btn btn-block" id="adminCleanupBtn">Ryd defekte beskeder</button>
-                </div>
-            </div>
-        </div>
-    </div>
-
-    <div id="privateModal" class="modal-overlay" style="display: none;">
-        <div class="modal">
-            <div class="modal-header">
-                <h4 id="privateRecipientName">💬 Privat chat</h4>
-                <button class="close-btn" id="closePrivateBtn">&times;</button>
-            </div>
-            <div class="private-messages" id="privateMessages"></div>
-            <div class="typing-indicator private" id="privateTypingIndicator" style="display:none;"></div>
-            <div class="private-input-area">
-                <input type="text" id="privateInput" placeholder="Privat besked…" autocomplete="off">
-                <button class="btn" id="sendPrivateBtn">Send</button>
-            </div>
-        </div>
-    </div>
-
-    <script src="app.js"></script>
 </body>
 </html>

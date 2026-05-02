@@ -1,654 +1,801 @@
-const SUPABASE_URL = "https://kglluoywbhirrewhyrrk.supabase.co";
-const SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InZ2dm5tdHBldnFycW11aHBtemd3Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3Nzc2MjMyMTYsImV4cCI6MjA5MzE5OTIxNn0.L2WiQmO3p3x-xezLMrXASjZMJeaF7E284gAP_MF1PFU";
-const ADMIN_CODE = "fugle123";
+(() => {
+  "use strict";
 
-const supabase = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+  const ONLINE_WINDOW_MS = 2 * 60 * 1000;
+  const HEARTBEAT_MS = 30 * 1000;
+  const MAX_MESSAGES = 100;
 
-let currentUser = null;
-let currentUsername = null;
-let isAdmin = false;
-let currentPrivateUser = null;
-let currentPrivateUsername = null;
-let messageSubscription = null;
-let onlineSubscription = null;
-let privateSubscription = null;
+  const $ = (selector) => document.querySelector(selector);
 
-// ================= AUTH =================
-const authContainer = document.getElementById("auth-container");
-const mainApp = document.getElementById("main-app");
-const authForm = document.getElementById("auth-form");
-const emailInput = document.getElementById("email");
-const passwordInput = document.getElementById("password");
-const usernameInput = document.getElementById("username");
-const toggleAuth = document.getElementById("toggle-auth-mode");
-const authError = document.getElementById("auth-error");
-const currentUsernameDisplay = document.getElementById("current-username");
-const logoutBtn = document.getElementById("logout-btn");
+  const elements = {
+    toast: $("#toast"),
+    authScreen: $("#authScreen"),
+    appShell: $("#appShell"),
+    authForm: $("#authForm"),
+    authTitle: $("#authTitle"),
+    authSubtitle: $("#authSubtitle"),
+    authSubmitBtn: $("#authSubmitBtn"),
+    toggleAuthBtn: $("#toggleAuthBtn"),
+    authMessage: $("#authMessage"),
+    emailInput: $("#emailInput"),
+    passwordInput: $("#passwordInput"),
+    usernameInput: $("#usernameInput"),
+    usernameGroup: $("#usernameGroup"),
+    currentUserLabel: $("#currentUserLabel"),
+    logoutBtn: $("#logoutBtn"),
+    refreshBtn: $("#refreshBtn"),
+    globalMessages: $("#globalMessages"),
+    globalForm: $("#globalForm"),
+    globalInput: $("#globalInput"),
+    sendGlobalBtn: $("#sendGlobalBtn"),
+    usersList: $("#usersList"),
+    onlineCount: $("#onlineCount"),
+    privateModal: $("#privateModal"),
+    privateTitle: $("#privateTitle"),
+    privateSubtitle: $("#privateSubtitle"),
+    privateMessages: $("#privateMessages"),
+    privateForm: $("#privateForm"),
+    privateInput: $("#privateInput"),
+    sendPrivateBtn: $("#sendPrivateBtn"),
+    closePrivateBtn: $("#closePrivateBtn")
+  };
 
-let isLogin = true;
+  let sb = null;
+  let authMode = "login";
+  let currentUser = null;
+  let currentProfile = null;
+  let selectedPrivateUser = null;
+  let globalChannel = null;
+  let profilesChannel = null;
+  let privateChannel = null;
+  let heartbeatTimer = null;
+  let startingApp = false;
 
-// BUG FIX #1: Tjek existing session ved page load
-async function checkExistingSession() {
-  const { data: { session } } = await supabase.auth.getSession();
-  if (session?.user) {
-    currentUser = session.user;
-    await loadUserProfile();
-    startApp();
+  document.addEventListener("DOMContentLoaded", init);
+
+  async function init() {
+    bindEvents();
+
+    const configError = getConfigError();
+    if (configError) {
+      showAuthMessage(configError, "error");
+      elements.authSubmitBtn.disabled = true;
+      elements.toggleAuthBtn.disabled = true;
+      return;
+    }
+
+    sb = window.supabase.createClient(
+      window.SOCIALHUB_CONFIG.SUPABASE_URL,
+      window.SOCIALHUB_CONFIG.SUPABASE_ANON_KEY,
+      {
+        auth: {
+          autoRefreshToken: true,
+          persistSession: true,
+          detectSessionInUrl: true
+        }
+      }
+    );
+
+    sb.auth.onAuthStateChange(async (event, session) => {
+      if (event === "SIGNED_OUT") {
+        await stopApp();
+        showAuthScreen();
+      }
+
+      if ((event === "SIGNED_IN" || event === "TOKEN_REFRESHED") && session?.user && !currentUser) {
+        await startApp(session.user);
+      }
+    });
+
+    const { data, error } = await sb.auth.getSession();
+    if (error) {
+      showAuthMessage(formatSupabaseError(error), "error");
+      return;
+    }
+
+    if (data.session?.user) {
+      await startApp(data.session.user);
+    } else {
+      showAuthScreen();
+    }
   }
-}
 
-checkExistingSession();
-
-toggleAuth.onclick = () => {
-  isLogin = !isLogin;
-  usernameInput.style.display = isLogin ? "none" : "block";
-  toggleAuth.textContent = isLogin ? "Opret konto i stedet" : "Log ind i stedet";
-  authError.textContent = "";
-};
-
-// BUG FIX #2: Gem username i database ved sign up
-authForm.onsubmit = async (e) => {
-  e.preventDefault();
-  authError.textContent = "";
-
-  if (isLogin) {
-    const { data, error } = await supabase.auth.signInWithPassword({
-      email: emailInput.value,
-      password: passwordInput.value,
+  function bindEvents() {
+    elements.toggleAuthBtn.addEventListener("click", () => {
+      authMode = authMode === "login" ? "signup" : "login";
+      updateAuthMode();
     });
 
-    if (error) {
-      authError.textContent = error.message;
-      return;
-    }
+    elements.authForm.addEventListener("submit", handleAuthSubmit);
+    elements.logoutBtn.addEventListener("click", handleLogout);
+    elements.refreshBtn.addEventListener("click", refreshAll);
+    elements.globalForm.addEventListener("submit", sendGlobalMessage);
+    elements.privateForm.addEventListener("submit", sendPrivateMessage);
+    elements.closePrivateBtn.addEventListener("click", closePrivateChat);
 
-    currentUser = data.user;
-    await loadUserProfile();
-    startApp();
-  } else {
-    // BUG FIX #6: Validér username
-    if (!usernameInput.value.trim()) {
-      authError.textContent = "Brugernavn er påkrævet";
-      return;
-    }
-
-    // Check if username already exists
-    const { data: existingUser } = await supabase
-      .from("users")
-      .select("id")
-      .eq("username", usernameInput.value.trim())
-      .single();
-
-    if (existingUser) {
-      authError.textContent = "Brugernavn er allerede taget";
-      return;
-    }
-
-    const { data, error } = await supabase.auth.signUp({
-      email: emailInput.value,
-      password: passwordInput.value,
+    elements.privateModal.addEventListener("click", (event) => {
+      if (event.target === elements.privateModal) closePrivateChat();
     });
 
-    if (error) {
-      authError.textContent = error.message;
+    window.addEventListener("beforeunload", () => {
+      // Browseren stopper ofte async requests her, men heartbeat rydder gamle online-statusser efter ca. 2 minutter.
+      setPresence(false).catch(() => {});
+    });
+  }
+
+  function getConfigError() {
+    const config = window.SOCIALHUB_CONFIG || {};
+    const url = String(config.SUPABASE_URL || "").trim();
+    const key = String(config.SUPABASE_ANON_KEY || "").trim();
+
+    if (!url || !key || key.includes("PASTE_YOUR_REAL_SUPABASE_ANON_PUBLIC_KEY_HERE")) {
+      return "Supabase mangler at blive sat op: åbn config.js og indsæt din rigtige Project URL og anon public key.";
+    }
+
+    if (!/^https:\/\/[a-z0-9-]+\.supabase\.co$/i.test(url)) {
+      return "SUPABASE_URL i config.js ser forkert ud. Den skal ligne: https://dit-project-ref.supabase.co";
+    }
+
+    const payload = decodeJwtPayload(key);
+    const projectRef = url.replace("https://", "").replace(".supabase.co", "");
+
+    if (!payload || payload.role !== "anon") {
+      return "SUPABASE_ANON_KEY i config.js er ikke en gyldig anon public key.";
+    }
+
+    if (payload.iss && payload.iss !== "supabase") {
+      return "SUPABASE_ANON_KEY i config.js er ugyldig. Den gamle nøgle i projektet havde en forkert issuer og skal erstattes.";
+    }
+
+    if (payload.ref && payload.ref !== projectRef) {
+      return "SUPABASE_ANON_KEY matcher ikke SUPABASE_URL. Kopiér både Project URL og anon public key fra samme Supabase-projekt.";
+    }
+
+    return "";
+  }
+
+  function decodeJwtPayload(jwt) {
+    try {
+      const payloadPart = jwt.split(".")[1];
+      if (!payloadPart) return null;
+      const normalized = payloadPart.replace(/-/g, "+").replace(/_/g, "/");
+      const padded = normalized + "=".repeat((4 - (normalized.length % 4)) % 4);
+      return JSON.parse(atob(padded));
+    } catch {
+      return null;
+    }
+  }
+
+  function updateAuthMode() {
+    const isSignup = authMode === "signup";
+    elements.authTitle.textContent = isSignup ? "Opret konto" : "SocialHub";
+    elements.authSubtitle.textContent = isSignup
+      ? "Opret en bruger med email, adgangskode og brugernavn."
+      : "Log ind for at chatte med andre brugere.";
+    elements.usernameGroup.hidden = !isSignup;
+    elements.usernameInput.required = isSignup;
+    elements.passwordInput.autocomplete = isSignup ? "new-password" : "current-password";
+    elements.authSubmitBtn.textContent = isSignup ? "Opret konto" : "Log ind";
+    elements.toggleAuthBtn.textContent = isSignup ? "Log ind i stedet" : "Opret konto i stedet";
+    showAuthMessage("");
+  }
+
+  async function handleAuthSubmit(event) {
+    event.preventDefault();
+    showAuthMessage("");
+
+    const email = elements.emailInput.value.trim();
+    const password = elements.passwordInput.value;
+    const username = normalizeUsername(elements.usernameInput.value);
+
+    if (!email || !password) {
+      showAuthMessage("Udfyld email og adgangskode.", "error");
       return;
     }
 
-    // BUG FIX #12: Gem username i users tabel
-    if (data.user) {
-      const { error: insertError } = await supabase
-        .from("users")
-        .insert({
-          id: data.user.id,
-          username: usernameInput.value.trim(),
-          email: emailInput.value,
+    if (password.length < 6) {
+      showAuthMessage("Adgangskoden skal være mindst 6 tegn.", "error");
+      return;
+    }
+
+    if (authMode === "signup" && !username) {
+      showAuthMessage("Vælg et brugernavn på 2-24 tegn.", "error");
+      return;
+    }
+
+    setButtonLoading(elements.authSubmitBtn, true, authMode === "signup" ? "Opretter..." : "Logger ind...");
+
+    try {
+      if (authMode === "signup") {
+        const { data, error } = await sb.auth.signUp({
+          email,
+          password,
+          options: {
+            data: { username }
+          }
         });
 
-      if (insertError) {
-        authError.textContent = "Fejl ved oprettelse af bruger: " + insertError.message;
+        if (error) throw error;
+
+        if (data.session?.user) {
+          await startApp(data.session.user, username);
+          showToast("Konto oprettet. Velkommen til SocialHub.", "success");
+          return;
+        }
+
+        showAuthMessage("Kontoen er oprettet. Bekræft din email, og log derefter ind.", "success");
+        authMode = "login";
+        updateAuthMode();
+        elements.passwordInput.value = "";
         return;
       }
+
+      const { data, error } = await sb.auth.signInWithPassword({ email, password });
+      if (error) throw error;
+      await startApp(data.user);
+    } catch (error) {
+      showAuthMessage(formatSupabaseError(error), "error");
+    } finally {
+      setButtonLoading(elements.authSubmitBtn, false);
+    }
+  }
+
+  async function startApp(user, usernameHint = "") {
+    if (startingApp) return;
+    startingApp = true;
+
+    try {
+      currentUser = user;
+      currentProfile = await ensureProfile(user, usernameHint);
+
+      if (!currentProfile) {
+        throw new Error("Profilen kunne ikke hentes eller oprettes. Tjek supabase-setup.sql og RLS policies.");
+      }
+
+      elements.authScreen.hidden = true;
+      elements.appShell.hidden = false;
+      elements.currentUserLabel.textContent = `@${currentProfile.username}`;
+
+      await setPresence(true);
+      await refreshAll();
+      subscribeGlobalMessages();
+      subscribeProfiles();
+      startHeartbeat();
+      elements.globalInput.focus();
+    } catch (error) {
+      await stopApp(false);
+      showAuthScreen();
+      showAuthMessage(formatSupabaseError(error), "error");
+    } finally {
+      startingApp = false;
+    }
+  }
+
+  async function ensureProfile(user, usernameHint = "") {
+    const fallbackUsername = normalizeUsername(
+      usernameHint || user.user_metadata?.username || user.email?.split("@")[0] || "bruger"
+    );
+
+    const { data: existingProfile, error: fetchError } = await sb
+      .from("profiles")
+      .select("id, username, is_online, last_seen, created_at")
+      .eq("id", user.id)
+      .maybeSingle();
+
+    if (fetchError) throw fetchError;
+    if (existingProfile) return existingProfile;
+
+    const { data: insertedProfile, error: insertError } = await sb
+      .from("profiles")
+      .upsert(
+        {
+          id: user.id,
+          username: fallbackUsername || `bruger_${user.id.slice(0, 6)}`,
+          is_online: true,
+          last_seen: new Date().toISOString()
+        },
+        { onConflict: "id" }
+      )
+      .select("id, username, is_online, last_seen, created_at")
+      .single();
+
+    if (insertError) throw insertError;
+    return insertedProfile;
+  }
+
+  async function stopApp(updatePresence = true) {
+    if (updatePresence && currentUser) {
+      await setPresence(false).catch(() => {});
     }
 
-    authError.textContent = "Konto oprettet! Log ind nu.";
-    isLogin = true;
-    usernameInput.style.display = "none";
-    toggleAuth.textContent = "Opret konto i stedet";
-    emailInput.value = "";
-    passwordInput.value = "";
-    usernameInput.value = "";
-  }
-};
+    clearInterval(heartbeatTimer);
+    heartbeatTimer = null;
 
-// BUG FIX #3: Implementer logout
-logoutBtn.onclick = async () => {
-  // Aflyst alle subscriptions
-  if (messageSubscription) messageSubscription.unsubscribe();
-  if (onlineSubscription) onlineSubscription.unsubscribe();
-  if (privateSubscription) privateSubscription.unsubscribe();
+    if (globalChannel) await sb.removeChannel(globalChannel).catch(() => {});
+    if (profilesChannel) await sb.removeChannel(profilesChannel).catch(() => {});
+    if (privateChannel) await sb.removeChannel(privateChannel).catch(() => {});
 
-  // Slet presence
-  if (currentUser) {
-    await supabase
-      .from("presence")
-      .delete()
-      .eq("user_id", currentUser.id);
+    globalChannel = null;
+    profilesChannel = null;
+    privateChannel = null;
+    currentUser = null;
+    currentProfile = null;
+    selectedPrivateUser = null;
   }
 
-  const { error } = await supabase.auth.signOut();
-  if (error) {
-    alert("Fejl ved logout: " + error.message);
-    return;
+  function showAuthScreen() {
+    elements.authScreen.hidden = false;
+    elements.appShell.hidden = true;
+    elements.privateModal.hidden = true;
+    elements.globalMessages.innerHTML = "";
+    elements.usersList.innerHTML = "";
+    elements.onlineCount.textContent = "0";
   }
 
-  // Reset variabler
-  currentUser = null;
-  currentUsername = null;
-  isAdmin = false;
-  currentPrivateUser = null;
-
-  // Reset UI
-  authContainer.style.display = "flex";
-  mainApp.classList.remove("show");
-  emailInput.value = "";
-  passwordInput.value = "";
-  usernameInput.value = "";
-  authError.textContent = "";
-  isLogin = true;
-  usernameInput.style.display = "none";
-  toggleAuth.textContent = "Opret konto i stedet";
-};
-
-// BUG FIX #11: Load user profil fra users tabel
-async function loadUserProfile() {
-  const { data, error } = await supabase
-    .from("users")
-    .select("username")
-    .eq("id", currentUser.id)
-    .single();
-
-  if (!error && data) {
-    currentUsername = data.username;
-    currentUsernameDisplay.textContent = `📝 ${data.username}`;
-  } else {
-    currentUsername = currentUser.email.split("@")[0];
-    currentUsernameDisplay.textContent = `📝 ${currentUsername}`;
+  async function handleLogout() {
+    elements.logoutBtn.disabled = true;
+    try {
+      await stopApp(true);
+      const { error } = await sb.auth.signOut();
+      if (error) throw error;
+      showAuthScreen();
+      showToast("Du er logget ud.", "success");
+    } catch (error) {
+      showToast(formatSupabaseError(error), "error");
+    } finally {
+      elements.logoutBtn.disabled = false;
+    }
   }
-}
 
-async function startApp() {
-  authContainer.style.display = "none";
-  mainApp.classList.add("show");
-
-  // BUG FIX #11: Insert presence when user logs in
-  await insertPresence();
-
-  loadMessages();
-  subscribeMessages();
-  loadOnlineUsers();
-  subscribeOnlineUsers();
-}
-
-// ================= GLOBAL CHAT =================
-const globalMessages = document.getElementById("global-messages");
-const globalForm = document.getElementById("global-message-form");
-const globalInput = document.getElementById("global-input");
-
-globalForm.onsubmit = async (e) => {
-  e.preventDefault();
-  if (!globalInput.value.trim()) return;
-
-  globalInput.disabled = true;
-
-  try {
-    await supabase.from("messages").insert({
-      content: globalInput.value.trim(),
-      user_id: currentUser.id,
-      username: currentUsername,
-    });
-
-    globalInput.value = "";
-  } catch (error) {
-    alert("Fejl ved afsendelse: " + error.message);
-  } finally {
-    globalInput.disabled = false;
-    globalInput.focus();
+  async function refreshAll() {
+    if (!currentUser) return;
+    await Promise.all([loadGlobalMessages(), loadUsers()]);
+    if (!elements.privateModal.hidden && selectedPrivateUser) {
+      await loadPrivateMessages();
+    }
   }
-};
 
-async function loadMessages() {
-  try {
-    // BUG FIX #14: Limiter antal beskedelser
-    const { data, error } = await supabase
-      .from("messages")
-      .select("*")
-      .order("created_at", { ascending: true })
-      .limit(100);
+  async function setPresence(isOnline) {
+    if (!sb || !currentUser) return;
+
+    const { error } = await sb
+      .from("profiles")
+      .update({
+        is_online: isOnline,
+        last_seen: new Date().toISOString()
+      })
+      .eq("id", currentUser.id);
 
     if (error) throw error;
-
-    globalMessages.innerHTML = "";
-    data.forEach(renderMessage);
-    globalMessages.scrollTop = globalMessages.scrollHeight;
-  } catch (error) {
-    console.error("Fejl ved loading af beskeder:", error);
-  }
-}
-
-// BUG FIX #9: Bedre HTML struktur og XSS protection
-function renderMessage(msg) {
-  const div = document.createElement("div");
-  div.className = "message";
-
-  const isOwn = msg.user_id === currentUser.id;
-
-  // Opret strukturerede elementer i stedet for innerHTML
-  const authorSpan = document.createElement("span");
-  authorSpan.className = "author";
-  authorSpan.textContent = msg.username || msg.user_id.slice(0, 6);
-
-  const contentSpan = document.createElement("span");
-  contentSpan.style.wordBreak = "break-word";
-  contentSpan.textContent = msg.content;
-
-  const timeSpan = document.createElement("span");
-  timeSpan.className = "time";
-  timeSpan.textContent = new Date(msg.created_at).toLocaleTimeString("da-DK");
-
-  div.appendChild(authorSpan);
-  div.appendChild(contentSpan);
-  div.appendChild(timeSpan);
-
-  // Tilføj delete knap hvis ejer eller admin
-  if (isOwn || isAdmin) {
-    const deleteBtn = document.createElement("button");
-    deleteBtn.textContent = "🗑";
-    deleteBtn.style.marginLeft = "8px";
-    deleteBtn.style.background = "none";
-    deleteBtn.style.border = "none";
-    deleteBtn.style.cursor = "pointer";
-    deleteBtn.style.color = "var(--danger)";
-    deleteBtn.onclick = () => deleteMessage(msg.id);
-    div.appendChild(deleteBtn);
   }
 
-  globalMessages.appendChild(div);
-}
-
-async function deleteMessage(id) {
-  if (!confirm("Slet denne besked?")) return;
-
-  try {
-    await supabase.from("messages").delete().eq("id", id);
-  } catch (error) {
-    alert("Fejl ved sletning: " + error.message);
+  function startHeartbeat() {
+    clearInterval(heartbeatTimer);
+    heartbeatTimer = setInterval(async () => {
+      try {
+        await setPresence(true);
+        await loadUsers();
+      } catch (error) {
+        console.warn("Heartbeat fejl:", error);
+      }
+    }, HEARTBEAT_MS);
   }
-}
 
-// BUG FIX #13: Bedre real-time subscription
-function subscribeMessages() {
-  messageSubscription = supabase
-    .channel("public:messages")
-    .on(
-      "postgres_changes",
-      { event: "*", schema: "public", table: "messages" },
-      () => loadMessages()
-    )
-    .subscribe();
-}
+  async function loadGlobalMessages() {
+    setEmptyState(elements.globalMessages, "Indlæser beskeder...");
 
-// ================= ONLINE USERS =================
-// BUG FIX #2: Implementér online liste
+    const { data, error } = await sb
+      .from("global_messages")
+      .select("id, user_id, username, content, created_at")
+      .order("created_at", { ascending: false })
+      .limit(MAX_MESSAGES);
 
-async function insertPresence() {
-  try {
-    await supabase.from("presence").insert({
-      user_id: currentUser.id,
-      username: currentUsername,
-      online: true,
-    });
-  } catch (error) {
-    console.error("Fejl ved insert presence:", error);
-  }
-}
-
-async function loadOnlineUsers() {
-  try {
-    const { data, error } = await supabase
-      .from("presence")
-      .select("user_id, username")
-      .eq("online", true)
-      .order("username");
-
-    if (error) throw error;
-
-    const onlineList = document.getElementById("online-list");
-    onlineList.innerHTML = "";
-
-    data.forEach((user) => {
-      if (user.user_id === currentUser.id) return; // Skip self
-
-      const li = document.createElement("li");
-      li.textContent = user.username || user.user_id.slice(0, 6);
-      li.dataset.userId = user.user_id;
-      li.dataset.username = user.username;
-      li.onclick = () => startPrivateChat(user.user_id, user.username);
-      onlineList.appendChild(li);
-    });
-  } catch (error) {
-    console.error("Fejl ved loading online users:", error);
-  }
-}
-
-// BUG FIX #11: Real-time online status
-function subscribeOnlineUsers() {
-  onlineSubscription = supabase
-    .channel("public:presence")
-    .on(
-      "postgres_changes",
-      { event: "*", schema: "public", table: "presence" },
-      () => loadOnlineUsers()
-    )
-    .subscribe();
-}
-
-// ================= ADMIN =================
-const adminBtn = document.getElementById("admin-btn");
-const adminModal = document.getElementById("admin-panel-modal");
-const adminPasswordModal = document.getElementById("admin-password-modal");
-const adminPasswordInput = document.getElementById("admin-password-input");
-const adminPasswordSubmit = document.getElementById("admin-password-submit");
-const closeAdminPassword = document.getElementById("close-admin-password");
-const closeAdminPanel = document.getElementById("close-admin-panel");
-
-adminBtn.onclick = () => {
-  adminPasswordModal.classList.add("show");
-  adminPasswordInput.value = "";
-  adminPasswordInput.focus();
-};
-
-adminPasswordSubmit.onclick = () => {
-  if (adminPasswordInput.value === ADMIN_CODE) {
-    isAdmin = true;
-    adminPasswordModal.classList.remove("show");
-    adminModal.classList.add("show");
-    loadUsers();
-  } else {
-    alert("Forkert admin kode");
-    adminPasswordInput.value = "";
-    adminPasswordInput.focus();
-  }
-};
-
-// BUG FIX #5: Modal close buttons
-closeAdminPassword.onclick = () => {
-  adminPasswordModal.classList.remove("show");
-};
-
-closeAdminPanel.onclick = () => {
-  adminModal.classList.remove("show");
-  isAdmin = false;
-};
-
-// BUG FIX #7: Load users fra users tabel i stedet for admin API
-async function loadUsers() {
-  try {
-    const { data, error } = await supabase
-      .from("users")
-      .select("id, username, email, suspended, blocked")
-      .order("username");
-
-    if (error) throw error;
-
-    const container = document.getElementById("admin-users-list");
-    
-    if (data.length === 0) {
-      container.innerHTML = "<p>Ingen brugere fundet</p>";
+    if (error) {
+      setEmptyState(elements.globalMessages, formatSupabaseError(error));
       return;
     }
 
-    let html = `
-      <table>
-        <thead>
-          <tr>
-            <th>Brugernavn</th>
-            <th>Email</th>
-            <th>Status</th>
-            <th>Handlinger</th>
-          </tr>
-        </thead>
-        <tbody>
-    `;
+    const messages = [...(data || [])].reverse();
+    elements.globalMessages.innerHTML = "";
 
-    data.forEach((user) => {
-      const status = user.blocked ? "🚫 Blokeret" : user.suspended ? "⏸️ Suspenderet" : "✅ Aktiv";
-      const buttons = user.blocked
-        ? `<button class="btn-unblock" onclick="unblockUser('${user.id}')">Fjern blokering</button>`
-        : user.suspended
-        ? `<button class="btn-unsuspend" onclick="unsuspendUser('${user.id}')">Ophæv suspension</button>`
-        : `
-            <button class="btn-suspend" onclick="suspendUser('${user.id}')">Suspender</button>
-            <button class="btn-block" onclick="blockUser('${user.id}')">Blokér</button>
-          `;
+    if (messages.length === 0) {
+      setEmptyState(elements.globalMessages, "Ingen beskeder endnu. Skriv den første besked.");
+      return;
+    }
 
-      html += `
-        <tr>
-          <td>${escapeHtml(user.username)}</td>
-          <td>${escapeHtml(user.email)}</td>
-          <td>${status}</td>
-          <td>${buttons}</td>
-        </tr>
-      `;
-    });
+    for (const message of messages) {
+      elements.globalMessages.appendChild(createMessageElement(message, "global"));
+    }
 
-    html += `
-        </tbody>
-      </table>
-    `;
-
-    container.innerHTML = html;
-  } catch (error) {
-    alert("Fejl ved loading af brugere: " + error.message);
-    console.error(error);
+    scrollToBottom(elements.globalMessages);
   }
-}
 
-// BUG FIX #8: Implementer suspend/block/unblock korrekt
-window.suspendUser = async (userId) => {
-  try {
-    const { error } = await supabase
-      .from("users")
-      .update({ suspended: true })
-      .eq("id", userId);
+  async function sendGlobalMessage(event) {
+    event.preventDefault();
 
-    if (error) throw error;
-    loadUsers();
-  } catch (error) {
-    alert("Fejl: " + error.message);
+    const content = elements.globalInput.value.trim();
+    if (!content || !currentUser || !currentProfile) return;
+
+    elements.globalInput.disabled = true;
+    elements.sendGlobalBtn.disabled = true;
+
+    try {
+      const { error } = await sb.from("global_messages").insert({
+        user_id: currentUser.id,
+        username: currentProfile.username,
+        content
+      });
+
+      if (error) throw error;
+      elements.globalInput.value = "";
+      await loadGlobalMessages();
+    } catch (error) {
+      showToast(formatSupabaseError(error), "error");
+    } finally {
+      elements.globalInput.disabled = false;
+      elements.sendGlobalBtn.disabled = false;
+      elements.globalInput.focus();
+    }
   }
-};
 
-window.unsuspendUser = async (userId) => {
-  try {
-    const { error } = await supabase
-      .from("users")
-      .update({ suspended: false })
-      .eq("id", userId);
+  function subscribeGlobalMessages() {
+    if (globalChannel) sb.removeChannel(globalChannel).catch(() => {});
 
-    if (error) throw error;
-    loadUsers();
-  } catch (error) {
-    alert("Fejl: " + error.message);
-  }
-};
-
-window.blockUser = async (userId) => {
-  try {
-    const { error } = await supabase
-      .from("users")
-      .update({ blocked: true })
-      .eq("id", userId);
-
-    if (error) throw error;
-    loadUsers();
-  } catch (error) {
-    alert("Fejl: " + error.message);
-  }
-};
-
-window.unblockUser = async (userId) => {
-  try {
-    const { error } = await supabase
-      .from("users")
-      .update({ blocked: false })
-      .eq("id", userId);
-
-    if (error) throw error;
-    loadUsers();
-  } catch (error) {
-    alert("Fejl: " + error.message);
-  }
-};
-
-// ================= PRIVATE CHAT =================
-const privateModal = document.getElementById("private-chat-modal");
-const privateChatTitle = document.getElementById("private-chat-title");
-const privateMessages = document.getElementById("private-messages");
-const privateForm = document.getElementById("private-message-form");
-const privateInput = document.getElementById("private-input");
-const closePrivateChat = document.getElementById("close-private-chat");
-
-// BUG FIX #5: Close private chat modal
-closePrivateChat.onclick = () => {
-  privateModal.classList.remove("show");
-  if (privateSubscription) privateSubscription.unsubscribe();
-};
-
-// BUG FIX #11: Start private chat med user info
-function startPrivateChat(userId, username) {
-  currentPrivateUser = userId;
-  currentPrivateUsername = username;
-  privateChatTitle.textContent = `💬 Chat med ${username}`;
-  privateModal.classList.add("show");
-  loadPrivate();
-}
-
-privateForm.onsubmit = async (e) => {
-  e.preventDefault();
-
-  if (!privateInput.value.trim()) return;
-
-  privateInput.disabled = true;
-
-  try {
-    await supabase.from("private_messages").insert({
-      from: currentUser.id,
-      from_username: currentUsername,
-      to: currentPrivateUser,
-      to_username: currentPrivateUsername,
-      content: privateInput.value.trim(),
-    });
-
-    privateInput.value = "";
-    loadPrivate();
-  } catch (error) {
-    alert("Fejl ved afsendelse: " + error.message);
-  } finally {
-    privateInput.disabled = false;
-    privateInput.focus();
-  }
-};
-
-// BUG FIX #4: Korrekt SQL query for private messages
-async function loadPrivate() {
-  try {
-    const { data, error } = await supabase
-      .from("private_messages")
-      .select("*")
-      .or(
-        `and(from.eq.${currentUser.id},to.eq.${currentPrivateUser}),and(from.eq.${currentPrivateUser},to.eq.${currentUser.id})`
+    globalChannel = sb
+      .channel("socialhub-global-messages")
+      .on(
+        "postgres_changes",
+        { event: "*", schema: "public", table: "global_messages" },
+        () => loadGlobalMessages()
       )
-      .order("created_at", { ascending: true });
+      .subscribe();
+  }
 
-    if (error) throw error;
+  async function loadUsers() {
+    const { data, error } = await sb
+      .from("profiles")
+      .select("id, username, is_online, last_seen")
+      .order("username", { ascending: true });
 
-    privateMessages.innerHTML = "";
+    if (error) {
+      elements.usersList.innerHTML = `<div class="empty-state">${escapeHtml(formatSupabaseError(error))}</div>`;
+      return;
+    }
 
-    data.forEach((msg) => {
-      const div = document.createElement("div");
-      div.className = "message";
-      div.style.alignSelf = msg.from === currentUser.id ? "flex-end" : "flex-start";
+    const users = (data || []).filter((user) => user.id !== currentUser.id);
+    const onlineUsers = (data || []).filter(isUserOnline);
+    elements.onlineCount.textContent = String(onlineUsers.length);
+    elements.usersList.innerHTML = "";
 
-      const authorSpan = document.createElement("span");
-      authorSpan.className = "author";
-      authorSpan.textContent = msg.from_username || msg.from.slice(0, 6);
+    if (users.length === 0) {
+      elements.usersList.innerHTML = "<div class=\"empty-state\">Der er ikke andre brugere endnu.</div>";
+      return;
+    }
 
-      const contentSpan = document.createElement("span");
-      contentSpan.textContent = msg.content;
+    for (const user of users) {
+      const userButton = document.createElement("button");
+      userButton.type = "button";
+      userButton.className = "user-row";
+      userButton.addEventListener("click", () => openPrivateChat(user));
 
-      const timeSpan = document.createElement("span");
-      timeSpan.className = "time";
-      timeSpan.textContent = new Date(msg.created_at).toLocaleTimeString("da-DK");
+      const avatar = document.createElement("span");
+      avatar.className = "avatar";
+      avatar.textContent = getInitials(user.username);
 
-      div.appendChild(authorSpan);
-      div.appendChild(contentSpan);
-      div.appendChild(timeSpan);
+      const info = document.createElement("span");
+      info.className = "user-row-info";
 
-      if (msg.from === currentUser.id || isAdmin) {
-        const deleteBtn = document.createElement("button");
-        deleteBtn.textContent = "🗑";
-        deleteBtn.style.marginLeft = "8px";
-        deleteBtn.style.background = "none";
-        deleteBtn.style.border = "none";
-        deleteBtn.style.cursor = "pointer";
-        deleteBtn.style.color = "var(--danger)";
-        deleteBtn.onclick = () => deletePrivate(msg.id);
-        div.appendChild(deleteBtn);
-      }
+      const name = document.createElement("strong");
+      name.textContent = `@${user.username}`;
 
-      privateMessages.appendChild(div);
-    });
+      const status = document.createElement("small");
+      const online = isUserOnline(user);
+      status.className = online ? "online" : "offline";
+      status.textContent = online ? "Online nu" : "Offline";
 
-    privateMessages.scrollTop = privateMessages.scrollHeight;
+      info.append(name, status);
+      userButton.append(avatar, info);
+      elements.usersList.appendChild(userButton);
+    }
+  }
 
-    // BUG FIX #13: Real-time updates for private messages
-    if (privateSubscription) privateSubscription.unsubscribe();
+  function subscribeProfiles() {
+    if (profilesChannel) sb.removeChannel(profilesChannel).catch(() => {});
+
+    profilesChannel = sb
+      .channel("socialhub-profiles")
+      .on(
+        "postgres_changes",
+        { event: "*", schema: "public", table: "profiles" },
+        () => loadUsers()
+      )
+      .subscribe();
+  }
+
+  function openPrivateChat(user) {
+    selectedPrivateUser = user;
+    elements.privateTitle.textContent = `Privat chat med @${user.username}`;
+    elements.privateSubtitle.textContent = isUserOnline(user) ? "Brugeren er online" : "Brugeren er offline, men beskeden bliver gemt.";
+    elements.privateModal.hidden = false;
+    elements.privateInput.value = "";
+    elements.privateInput.focus();
     subscribePrivateMessages();
-  } catch (error) {
-    console.error("Fejl ved loading private messages:", error);
+    loadPrivateMessages();
   }
-}
 
-function subscribePrivateMessages() {
-  privateSubscription = supabase
-    .channel(`private:${currentPrivateUser}`)
-    .on(
-      "postgres_changes",
-      { event: "INSERT", schema: "public", table: "private_messages" },
-      () => loadPrivate()
-    )
-    .subscribe();
-}
+  function closePrivateChat() {
+    elements.privateModal.hidden = true;
+    elements.privateMessages.innerHTML = "";
+    selectedPrivateUser = null;
 
-async function deletePrivate(id) {
-  if (!confirm("Slet denne besked?")) return;
-
-  try {
-    await supabase.from("private_messages").delete().eq("id", id);
-    loadPrivate();
-  } catch (error) {
-    alert("Fejl ved sletning: " + error.message);
+    if (privateChannel) {
+      sb.removeChannel(privateChannel).catch(() => {});
+      privateChannel = null;
+    }
   }
-}
 
-// ================= UTILITY =================
-function escapeHtml(text) {
-  const map = {
-    "&": "&amp;",
-    "<": "&lt;",
-    ">": "&gt;",
-    '"': "&quot;",
-    "'": "&#039;",
-  };
-  return text.replace(/[&<>"']/g, (m) => map[m]);
-}
+  async function loadPrivateMessages() {
+    if (!selectedPrivateUser || !currentUser) return;
+
+    setEmptyState(elements.privateMessages, "Indlæser privat chat...");
+
+    const ownId = currentUser.id;
+    const otherId = selectedPrivateUser.id;
+
+    const { data, error } = await sb
+      .from("private_messages")
+      .select("id, sender_id, receiver_id, sender_username, receiver_username, content, created_at")
+      .or(`and(sender_id.eq.${ownId},receiver_id.eq.${otherId}),and(sender_id.eq.${otherId},receiver_id.eq.${ownId})`)
+      .order("created_at", { ascending: true })
+      .limit(MAX_MESSAGES);
+
+    if (error) {
+      setEmptyState(elements.privateMessages, formatSupabaseError(error));
+      return;
+    }
+
+    elements.privateMessages.innerHTML = "";
+
+    if (!data || data.length === 0) {
+      setEmptyState(elements.privateMessages, "Ingen private beskeder endnu.");
+      return;
+    }
+
+    for (const message of data) {
+      elements.privateMessages.appendChild(createMessageElement(message, "private"));
+    }
+
+    scrollToBottom(elements.privateMessages);
+  }
+
+  async function sendPrivateMessage(event) {
+    event.preventDefault();
+
+    if (!selectedPrivateUser || !currentUser || !currentProfile) return;
+
+    const content = elements.privateInput.value.trim();
+    if (!content) return;
+
+    elements.privateInput.disabled = true;
+    elements.sendPrivateBtn.disabled = true;
+
+    try {
+      const { error } = await sb.from("private_messages").insert({
+        sender_id: currentUser.id,
+        receiver_id: selectedPrivateUser.id,
+        sender_username: currentProfile.username,
+        receiver_username: selectedPrivateUser.username,
+        content
+      });
+
+      if (error) throw error;
+      elements.privateInput.value = "";
+      await loadPrivateMessages();
+    } catch (error) {
+      showToast(formatSupabaseError(error), "error");
+    } finally {
+      elements.privateInput.disabled = false;
+      elements.sendPrivateBtn.disabled = false;
+      elements.privateInput.focus();
+    }
+  }
+
+  function subscribePrivateMessages() {
+    if (privateChannel) sb.removeChannel(privateChannel).catch(() => {});
+
+    privateChannel = sb
+      .channel(`socialhub-private-${currentUser.id}-${selectedPrivateUser.id}`)
+      .on(
+        "postgres_changes",
+        { event: "*", schema: "public", table: "private_messages" },
+        (payload) => {
+          const row = payload.new || payload.old;
+          if (!row || !selectedPrivateUser) return;
+
+          const isCurrentConversation =
+            (row.sender_id === currentUser.id && row.receiver_id === selectedPrivateUser.id) ||
+            (row.sender_id === selectedPrivateUser.id && row.receiver_id === currentUser.id);
+
+          if (isCurrentConversation) loadPrivateMessages();
+        }
+      )
+      .subscribe();
+  }
+
+  function createMessageElement(message, type) {
+    const isPrivate = type === "private";
+    const authorId = isPrivate ? message.sender_id : message.user_id;
+    const authorName = isPrivate ? message.sender_username : message.username;
+    const isOwn = authorId === currentUser.id;
+
+    const wrapper = document.createElement("article");
+    wrapper.className = `message ${isOwn ? "own" : "other"}`;
+
+    const meta = document.createElement("div");
+    meta.className = "message-meta";
+
+    const author = document.createElement("strong");
+    author.textContent = isOwn ? "Dig" : `@${authorName || "bruger"}`;
+
+    const time = document.createElement("time");
+    time.dateTime = message.created_at;
+    time.textContent = formatTime(message.created_at);
+
+    meta.append(author, time);
+
+    const content = document.createElement("p");
+    content.textContent = message.content;
+
+    wrapper.append(meta, content);
+
+    if (isOwn) {
+      const deleteButton = document.createElement("button");
+      deleteButton.type = "button";
+      deleteButton.className = "delete-message";
+      deleteButton.textContent = "Slet";
+      deleteButton.addEventListener("click", () => {
+        if (isPrivate) deletePrivateMessage(message.id);
+        else deleteGlobalMessage(message.id);
+      });
+      wrapper.appendChild(deleteButton);
+    }
+
+    return wrapper;
+  }
+
+  async function deleteGlobalMessage(messageId) {
+    if (!confirm("Vil du slette beskeden?")) return;
+
+    const { error } = await sb.from("global_messages").delete().eq("id", messageId).eq("user_id", currentUser.id);
+    if (error) {
+      showToast(formatSupabaseError(error), "error");
+      return;
+    }
+
+    await loadGlobalMessages();
+  }
+
+  async function deletePrivateMessage(messageId) {
+    if (!confirm("Vil du slette den private besked?")) return;
+
+    const { error } = await sb.from("private_messages").delete().eq("id", messageId).eq("sender_id", currentUser.id);
+    if (error) {
+      showToast(formatSupabaseError(error), "error");
+      return;
+    }
+
+    await loadPrivateMessages();
+  }
+
+  function isUserOnline(user) {
+    if (!user?.is_online || !user.last_seen) return false;
+    return Date.now() - new Date(user.last_seen).getTime() < ONLINE_WINDOW_MS;
+  }
+
+  function normalizeUsername(value) {
+    const normalized = String(value || "")
+      .trim()
+      .replace(/^@+/, "")
+      .replace(/\s+/g, "_")
+      .replace(/[^a-zA-Z0-9_æøåÆØÅ-]/g, "")
+      .slice(0, 24);
+
+    return normalized.length >= 2 ? normalized : "";
+  }
+
+  function getInitials(username) {
+    return String(username || "?").slice(0, 2).toUpperCase();
+  }
+
+  function formatTime(value) {
+    try {
+      return new Intl.DateTimeFormat("da-DK", {
+        hour: "2-digit",
+        minute: "2-digit",
+        day: "2-digit",
+        month: "2-digit"
+      }).format(new Date(value));
+    } catch {
+      return "";
+    }
+  }
+
+  function formatSupabaseError(error) {
+    const message = String(error?.message || error || "Ukendt fejl");
+
+    if (message.includes("relation") && message.includes("does not exist")) {
+      return "Databasen mangler tabeller. Kør supabase-setup.sql i Supabase SQL Editor.";
+    }
+
+    if (message.includes("Invalid API key") || message.includes("No API key")) {
+      return "Supabase API-nøglen er forkert. Ret SUPABASE_ANON_KEY i config.js.";
+    }
+
+    if (message.includes("JWT") || message.includes("invalid claim")) {
+      return "Supabase login-token/API key er ugyldig. Kopiér en ny anon public key fra Supabase.";
+    }
+
+    if (message.includes("Email not confirmed")) {
+      return "Emailen er ikke bekræftet endnu. Tjek din mail eller slå email-bekræftelse fra i Supabase Auth settings.";
+    }
+
+    if (message.includes("Invalid login credentials")) {
+      return "Forkert email eller adgangskode.";
+    }
+
+    if (message.includes("row-level security") || message.includes("permission denied")) {
+      return "Supabase RLS blokerer handlingen. Kør supabase-setup.sql igen og tjek at du bruger den rigtige bruger.";
+    }
+
+    if (message.includes("duplicate key")) {
+      return "Det brugernavn eller den konto findes allerede.";
+    }
+
+    return message;
+  }
+
+  function showAuthMessage(message, type = "") {
+    elements.authMessage.textContent = message;
+    elements.authMessage.className = `auth-message ${type}`.trim();
+  }
+
+  function showToast(message, type = "info") {
+    elements.toast.textContent = message;
+    elements.toast.className = `toast show ${type}`;
+    clearTimeout(showToast.timeout);
+    showToast.timeout = setTimeout(() => {
+      elements.toast.className = "toast";
+    }, 3500);
+  }
+
+  function setButtonLoading(button, loading, label = "") {
+    if (loading) {
+      button.textContent = label || "Vent...";
+      button.disabled = true;
+      return;
+    }
+
+    button.textContent = authMode === "signup" ? "Opret konto" : "Log ind";
+    button.disabled = false;
+  }
+
+  function setEmptyState(container, text) {
+    container.innerHTML = "";
+    const empty = document.createElement("div");
+    empty.className = "empty-state";
+    empty.textContent = text;
+    container.appendChild(empty);
+  }
+
+  function scrollToBottom(container) {
+    requestAnimationFrame(() => {
+      container.scrollTop = container.scrollHeight;
+    });
+  }
+
+  function escapeHtml(text) {
+    const div = document.createElement("div");
+    div.textContent = String(text || "");
+    return div.innerHTML;
+  }
+})();
