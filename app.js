@@ -219,7 +219,7 @@
 
         if (data.session?.user) {
           await startApp(data.session.user, username);
-          showToast("Konto oprettet. Velkommen til SocialHub.", "success");
+          showToast("Konto oprettet! Velkommen til SocialHub. 🎉", "success");
           return;
         }
 
@@ -233,6 +233,7 @@
       const { data, error } = await sb.auth.signInWithPassword({ email, password });
       if (error) throw error;
       await startApp(data.user);
+      showToast("Velkommen tilbage! 👋", "success");
     } catch (error) {
       showAuthMessage(formatSupabaseError(error), "error");
     } finally {
@@ -250,6 +251,13 @@
 
       if (!currentProfile) {
         throw new Error("Profilen kunne ikke hentes eller oprettes. Tjek supabase-setup.sql og RLS policies.");
+      }
+
+      // Kald cleanup funktion for at slette gamle beskeder
+      try {
+        await sb.rpc("cleanup_old_messages");
+      } catch (cleanupError) {
+        console.log("Cleanup ikke tilgængelig (dette er OK hvis pg_cron ikke er enabled):", cleanupError.message);
       }
 
       elements.authScreen.hidden = true;
@@ -414,10 +422,20 @@
     event.preventDefault();
 
     const content = elements.globalInput.value.trim();
-    if (!content || !currentUser || !currentProfile) return;
+    if (!content) {
+      showToast("Skriv en besked først", "info");
+      return;
+    }
+    
+    if (!currentUser || !currentProfile) {
+      showToast("❌ Du er ikke logget ind", "error");
+      return;
+    }
 
     elements.globalInput.disabled = true;
     elements.sendGlobalBtn.disabled = true;
+    const originalText = elements.sendGlobalBtn.textContent;
+    elements.sendGlobalBtn.textContent = "Sender...";
 
     try {
       const { error } = await sb.from("global_messages").insert({
@@ -428,12 +446,14 @@
 
       if (error) throw error;
       elements.globalInput.value = "";
+      showToast("✓ Besked sendt", "success");
       await loadGlobalMessages();
     } catch (error) {
       showToast(formatSupabaseError(error), "error");
     } finally {
       elements.globalInput.disabled = false;
       elements.sendGlobalBtn.disabled = false;
+      elements.sendGlobalBtn.textContent = originalText;
       elements.globalInput.focus();
     }
   }
@@ -571,13 +591,21 @@
   async function sendPrivateMessage(event) {
     event.preventDefault();
 
-    if (!selectedPrivateUser || !currentUser || !currentProfile) return;
+    if (!selectedPrivateUser || !currentUser || !currentProfile) {
+      showToast("❌ Vælg en bruger først", "error");
+      return;
+    }
 
     const content = elements.privateInput.value.trim();
-    if (!content) return;
+    if (!content) {
+      showToast("Skriv en besked først", "info");
+      return;
+    }
 
     elements.privateInput.disabled = true;
     elements.sendPrivateBtn.disabled = true;
+    const originalText = elements.sendPrivateBtn.textContent;
+    elements.sendPrivateBtn.textContent = "Sender...";
 
     try {
       const { error } = await sb.from("private_messages").insert({
@@ -590,12 +618,14 @@
 
       if (error) throw error;
       elements.privateInput.value = "";
+      showToast("✓ Privat besked sendt", "success");
       await loadPrivateMessages();
     } catch (error) {
       showToast(formatSupabaseError(error), "error");
     } finally {
       elements.privateInput.disabled = false;
       elements.sendPrivateBtn.disabled = false;
+      elements.sendPrivateBtn.textContent = originalText;
       elements.privateInput.focus();
     }
   }
@@ -616,7 +646,13 @@
             (row.sender_id === currentUser.id && row.receiver_id === selectedPrivateUser.id) ||
             (row.sender_id === selectedPrivateUser.id && row.receiver_id === currentUser.id);
 
-          if (isCurrentConversation) loadPrivateMessages();
+          if (isCurrentConversation) {
+            // Hvis beskeden er sendt af andre brugere til mig, vis toast
+            if (payload.eventType === "INSERT" && row.receiver_id === currentUser.id && row.sender_id === selectedPrivateUser.id) {
+              showToast(`💬 Ny besked fra @${row.sender_username}`, "info");
+            }
+            loadPrivateMessages();
+          }
         }
       )
       .subscribe();
@@ -723,35 +759,91 @@
   function formatSupabaseError(error) {
     const message = String(error?.message || error || "Ukendt fejl");
 
+    // DATABASE FEJL
     if (message.includes("relation") && message.includes("does not exist")) {
-      return "Databasen mangler tabeller. Kør supabase-setup.sql i Supabase SQL Editor.";
+      return "❌ Databasen mangler tabeller. Du skal køre supabase-setup.sql i Supabase SQL Editor først.";
     }
 
+    // API/CONFIG FEJL
     if (message.includes("Invalid API key") || message.includes("No API key")) {
-      return "Supabase API-nøglen er forkert. Ret SUPABASE_ANON_KEY i config.js.";
+      return "❌ Supabase API-nøglen i config.js er forkert eller mangler. Kopiér en ny fra Supabase → Project Settings → API.";
     }
 
+    if (message.includes("Failed to fetch") || message.includes("ERR_INVALID_URL")) {
+      return "❌ Kan ikke forbinde til Supabase. Tjek at SUPABASE_URL i config.js er korrekt og starter med 'https://'";
+    }
+
+    // JWT/TOKEN FEJL
     if (message.includes("JWT") || message.includes("invalid claim")) {
-      return "Supabase login-token/API key er ugyldig. Kopiér en ny anon public key fra Supabase.";
+      return "❌ Dit login-token eller API key er udløbet. Prøv at logge ud og ind igen, eller kopiér en ny anon public key fra Supabase.";
     }
 
+    if (message.includes("invalid_grant")) {
+      return "❌ Forkert email eller adgangskode. Husk stort/småbogstaver tæller med.";
+    }
+
+    // EMAIL BEKRÆFTELSE
     if (message.includes("Email not confirmed")) {
-      return "Emailen er ikke bekræftet endnu. Tjek din mail eller slå email-bekræftelse fra i Supabase Auth settings.";
+      return "❌ Du skal bekræfte din email først. Tjek din mail, eller slå email-bekræftelse fra i Supabase → Authentication → Email.";
     }
 
+    // LOGIN FEJL
     if (message.includes("Invalid login credentials")) {
-      return "Forkert email eller adgangskode.";
+      return "❌ Forkert email eller adgangskode. Prøv igen, og husk at stavekontrol tæller.";
     }
 
+    if (message.includes("User not found")) {
+      return "❌ Denne email eksisterer ikke. Opret en ny konto eller prøv en anden email.";
+    }
+
+    if (message.includes("password")) {
+      return "❌ Dit password skal være mindst 6 tegn langt.";
+    }
+
+    // DUPLIKATER
+    if (message.includes("duplicate") || message.includes("unique")) {
+      if (message.includes("username")) {
+        return "❌ Dette brugernavn er allerede taget. Vælg et andet.";
+      }
+      if (message.includes("email")) {
+        return "❌ Denne email er allerede tilmeldt. Log ind eller brug en anden email.";
+      }
+      return "❌ Denne værdi eksisterer allerede. Prøv en anden.";
+    }
+
+    // RLS/SIKKERHED
     if (message.includes("row-level security") || message.includes("permission denied")) {
-      return "Supabase RLS blokerer handlingen. Kør supabase-setup.sql igen og tjek at du bruger den rigtige bruger.";
+      return "❌ Du har ikke adgang til dette. Tjek at du er logget ind som den rigtige bruger, eller at supabase-setup.sql blev kørt korrekt.";
     }
 
-    if (message.includes("duplicate key")) {
-      return "Det brugernavn eller den konto findes allerede.";
+    if (message.includes("policy")) {
+      return "❌ Dit forsøg blev blokeret af sikkerhedspolitikker. Dette kan være en database-opsætnings-fejl. Kontakt en admin.";
     }
 
-    return message;
+    // NETVÆRK FEJL
+    if (message.includes("timeout")) {
+      return "⏱️ Anmodningen tog for lang tid. Tjek din internetforbindelse og prøv igen.";
+    }
+
+    if (message.includes("net::") || message.includes("ERR_FAILED")) {
+      return "🌐 Netværksfejl. Tjek at du er online og at Supabase server er oppe.";
+    }
+
+    if (message.includes("404") || message.includes("not found")) {
+      return "❌ Server finder ikke hvad du leder efter. Dette kan være en config-fejl.";
+    }
+
+    // REALTIME/SUBSCRIPTION
+    if (message.includes("subscription") || message.includes("channel")) {
+      return "⚠️ Realtime-forbindelse fejlede. Beskederne opdateres måske ikke live. Prøv at refresh siden.";
+    }
+
+    // DEFAULT
+    if (message.includes("Error") || message.length > 100) {
+      return `⚠️ Uventet fejl: ${message.slice(0, 80)}... Tjek browser console (F12) for mere info.`;
+    }
+
+    return `❌ Fejl: ${message}`;
   }
 
   function showAuthMessage(message, type = "") {
