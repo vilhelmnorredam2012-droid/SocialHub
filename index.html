@@ -1,6 +1,94 @@
 <!DOCTYPE html>
 <html lang="da">
 <head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Chat App</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <div id="app">
+    <!-- Login/registrering -->
+    <div id="auth-container">
+      <div class="auth-card">
+        <h1>💬 Chat App</h1>
+        <p class="subtitle">Log ind eller opret en konto for at komme i gang</p>
+        <form id="auth-form">
+          <input type="email" id="email" placeholder="Din email" required>
+          <input type="password" id="password" placeholder="Adgangskode" required>
+          <input type="text" id="username" placeholder="Brugernavn (kun ved oprettelse)">
+          <button type="submit" id="auth-submit">Log ind</button>
+          <button type="button" id="toggle-auth-mode">Opret konto i stedet</button>
+        </form>
+        <p id="auth-error"></p>
+      </div>
+    </div>
+
+    <!-- Hovedapp (skjult indtil login) -->
+    <div id="main-app">
+      <header>
+        <h1>💬 Global Chat</h1>
+        <div id="user-info">
+          <span id="current-username"></span>
+          <button type="button" id="logout-btn">Log ud</button>
+          <button type="button" id="admin-btn">👨‍💼 Admin</button>
+        </div>
+      </header>
+      <div id="content">
+        <div id="global-chat">
+          <h2>Global Chat</h2>
+          <div id="global-messages"></div>
+          <form id="global-message-form">
+            <input type="text" id="global-input" placeholder="Skriv en besked..." autocomplete="off">
+            <button type="submit">Send</button>
+          </form>
+        </div>
+        <div id="online-panel">
+          <h2>Online Brugere</h2>
+          <ul id="online-list"></ul>
+        </div>
+      </div>
+    </div>
+
+    <!-- Admin adgangskode modal -->
+    <div id="admin-password-modal" class="modal">
+      <div class="modal-content">
+        <button type="button" class="close" id="close-admin-password">&times;</button>
+        <h3>Admin Adgangskode</h3>
+        <input type="password" id="admin-password-input" placeholder="Adgangskode">
+        <button type="button" id="admin-password-submit">OK</button>
+      </div>
+    </div>
+
+    <!-- Admin panel modal -->
+    <div id="admin-panel-modal" class="modal">
+      <div class="modal-content large">
+        <button type="button" class="close" id="close-admin-panel">&times;</button>
+        <h3>Admin Panel - Håndter Brugere</h3>
+        <div id="admin-users-list"></div>
+      </div>
+    </div>
+
+    <!-- Privat chat modal -->
+    <div id="private-chat-modal" class="modal">
+      <div class="modal-content">
+        <button type="button" class="close" id="close-private-chat">&times;</button>
+        <h3 id="private-chat-title">Privat Chat</h3>
+        <div id="private-messages"></div>
+        <form id="private-message-form">
+          <input type="text" id="private-input" placeholder="Skriv en besked..." autocomplete="off">
+          <button type="submit">Send</button>
+        </form>
+      </div>
+    </div>
+  </div>
+
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+  <script src="app.js"></script>
+</body>
+</html><!DOCTYPE html>
+<html lang="da">
+<head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>SocialHub</title>
